@@ -1,0 +1,27 @@
+[project]
+name = "nnact"
+version = "0.1.0"
+description = "Model-agnostic activation extraction and HDF5 caching for PyTorch models"
+requires-python = ">=3.13"
+dependencies = [
+    "h5py>=3.16.0",
+    "torch>=2.14.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+ignoreMissingTypeStubs = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
