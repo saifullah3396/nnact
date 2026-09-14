@@ -5,6 +5,7 @@ description = "Model-agnostic activation extraction and HDF5 caching for PyTorch
 requires-python = ">=3.13"
 dependencies = [
     "h5py>=3.16.0",
+    "pytorch-ignite>=0.5.5",
     "torch>=2.14.0",
 ]
 

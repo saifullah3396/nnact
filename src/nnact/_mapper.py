@@ -1,14 +1,16 @@
-import time
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, final, overload
 
 import torch
+from ignite.engine import Engine
+from ignite.handlers import Timer
 from torch import nn
 
 from nnact._model import HookedModel
 from nnact._types import RunMetadata
+from nnact._utils import _as_list, _model_device, _move_tensors, _split_batch
 from nnact.store import (
     ActivationStore,
     ActivationWriter,
@@ -22,105 +24,39 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-def _as_list(layer_names: str | list[str]) -> list[str]:
-    """Accept a single layer name or a list of them."""
-    return [layer_names] if isinstance(layer_names, str) else list(layer_names)
+class ActivationStep:
+    """Capture and write activations for one caller-provided batch."""
 
+    def __init__(
+        self,
+        model: nn.Module,
+        layer_names: list[str],
+        writer: ActivationWriter,
+        device: torch.device | str | None,
+    ) -> None:
+        self._model = HookedModel(model)
+        self._model.eval()
+        self._layer_names = layer_names
+        self._writer = writer
+        self._device = device
 
-def _with_progress[T](
-    batches: Iterable[T], *, enabled: bool, label: str
-) -> Iterable[T]:
-    """Wrap an iterable in a tqdm bar, falling back to it unchanged.
+    @torch.no_grad()
+    def __call__(self, _engine: Engine, batch: Mapping[str, Any]) -> int:
+        if not isinstance(batch, Mapping):
+            raise TypeError("Each loader batch must be a mapping.")
 
-    tqdm is not a dependency of ``nnact``, and its notebook variant is picked
-    automatically when running under Jupyter.
+        ids, model_inputs = _split_batch(batch)
+        if self._device is not None:
+            model_inputs = _move_tensors(model_inputs, self._device)
 
-    Args:
-        batches: The iterable to wrap.
-        enabled: Pass ``False`` to skip the bar entirely.
-        label: Description shown beside the bar.
+        with self._model.capture(self._layer_names):
+            self._model(**model_inputs)
+            activations = {
+                name: self._model.get_activation(name) for name in self._layer_names
+            }
+            self._writer.write(ids, activations)
 
-    Returns:
-        ``batches``, wrapped if tqdm is available and ``enabled`` is set.
-    """
-    if not enabled:
-        return batches
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:
-        return batches
-    return tqdm(batches, desc=f"{label} activations", unit="batch")
-
-
-def _describe_device(device: torch.device) -> str:
-    """Name the hardware behind a device, not just its index.
-
-    ``cuda:0`` says nothing about which card ran a job, which is what makes a
-    recorded duration interpretable later.
-
-    Args:
-        device: The device to describe.
-
-    Returns:
-        The GPU's model name with its index, or the plain device type for CPU
-        and for accelerators exposing no name.
-    """
-    if device.type == "cuda" and torch.cuda.is_available():
-        index = (
-            device.index if device.index is not None else torch.cuda.current_device()
-        )
-        return f"{torch.cuda.get_device_name(index)} (cuda:{index})"
-    return str(device)
-
-
-def _model_device(model: nn.Module, override: torch.device | str | None) -> str:
-    """Report the device the model's forward passes actually ran on.
-
-    Prefers the model's own parameters over the ``device`` argument, since a
-    model already living on a GPU runs there whether or not a device was
-    passed. Falls back to the argument for parameterless models.
-
-    Args:
-        model: The model that was run.
-        override: The ``device`` argument given to :meth:`ActivationMapper.map`.
-
-    Returns:
-        A human-readable device description.
-    """
-    try:
-        return _describe_device(next(model.parameters()).device)
-    except StopIteration:
-        return _describe_device(torch.device(override)) if override else "cpu"
-
-
-def _move_tensors(value: object, device: torch.device | str) -> object:
-    """Move tensor leaves while preserving the caller's batch structure."""
-    if isinstance(value, torch.Tensor):
-        return value.to(device)
-    if isinstance(value, Mapping):
-        return {key: _move_tensors(item, device) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return tuple(_move_tensors(item, device) for item in value)
-    if isinstance(value, list):
-        return [_move_tensors(item, device) for item in value]
-    return value
-
-
-def _split_batch(batch: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
-    """Separate required sample IDs from keyword arguments for the model."""
-    if "id" not in batch:
-        raise ValueError('Each loader batch must contain an "id" field.')
-
-    ids = batch["id"]
-    if isinstance(ids, str) or not isinstance(ids, Iterable):
-        raise TypeError('Batch "id" must be an iterable of sample ID strings.')
-
-    ids = list(ids)
-    if not all(isinstance(sample_id, str) for sample_id in ids):
-        raise TypeError('Batch "id" must contain only strings.')
-
-    model_inputs = {key: value for key, value in batch.items() if key != "id"}
-    return ids, model_inputs
+        return len(ids)
 
 
 @final
@@ -228,6 +164,28 @@ class ActivationMapper:
         )
         raise ValueError("\n".join(lines))
 
+    def _create_engine(
+        self, step: ActivationStep, *, progress: bool
+    ) -> tuple[Engine, Timer]:
+        """Build the Ignite engine and attach run-level handlers."""
+        engine = Engine(step)
+        timer = Timer(average=False).attach(engine)
+
+        if progress:
+            from ignite.contrib.handlers import ProgressBar
+
+            ProgressBar(desc=f"{type(self._model).__name__} activations").attach(engine)
+
+        return engine, timer
+
+    def _create_writer(
+        self, path: Path | None, writer: ActivationWriter | None
+    ) -> ActivationWriter:
+        """Use the explicit writer or create one from the optional path."""
+        if writer is not None:
+            return writer
+        return MemoryActivationWriter() if path is None else H5ActivationWriter(path)
+
     @overload
     def map(
         self,
@@ -287,8 +245,7 @@ class ActivationMapper:
             writer: Supply a writer directly, overriding ``path``.
             device: Device to move tensor leaves to. Other batch values are
                 preserved. The model is not moved; do that yourself beforehand.
-            progress: Show a tqdm progress bar over the batches. Silently
-                skipped if tqdm is not installed.
+            progress: Show Ignite's progress bar over the batches.
 
         Returns:
             A store over the captured activations. The concrete type is
@@ -305,39 +262,18 @@ class ActivationMapper:
         names = _as_list(layer_names)
         self._check_layers(names)
 
-        if writer is None:
-            writer = (
-                MemoryActivationWriter() if path is None else H5ActivationWriter(path)
-            )
-
-        hooked = HookedModel(self._model)
-        hooked.eval()
-
-        batches = _with_progress(
-            loader, enabled=progress, label=type(self._model).__name__
-        )
-        started = time.perf_counter()
-        with torch.no_grad():
-            for batch in batches:
-                if not isinstance(batch, Mapping):
-                    raise TypeError("Each loader batch must be a mapping.")
-                ids, model_inputs = _split_batch(batch)
-                if device is not None:
-                    model_inputs = _move_tensors(model_inputs, device)
-                with hooked.capture(names):
-                    hooked(**model_inputs)
-                    activations = {name: hooked.get_activation(name) for name in names}
-                    writer.write(ids, activations)
-        elapsed = time.perf_counter() - started
-
-        writer.metadata = RunMetadata(
+        writer = self._create_writer(path, writer)
+        step = ActivationStep(self._model, names, writer, device)
+        engine, timer = self._create_engine(step, progress=progress)
+        engine.run(loader, max_epochs=1)
+        metadata = RunMetadata(
             model=type(self._model).__name__,
             parameters=self.parameter_count(),
             layers=names,
-            samples=len(writer.sample_ids),
+            samples=writer.sample_count,
             batch_size=getattr(loader, "batch_size", None) or 0,
             device=_model_device(self._model, device),
-            seconds=elapsed,
+            seconds=timer.value(),
             created=datetime.now(UTC).isoformat(timespec="seconds"),
         )
-        return writer.close()
+        return writer.close(metadata=metadata)

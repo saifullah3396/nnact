@@ -38,8 +38,8 @@ from nnact.store._store import ActivationStore, H5ActivationStore, MemoryActivat
 class ActivationWriter(ABC):
     """Base class for incremental activation writers.
 
-    Handles sample ID accumulation and batch validation, delegating storage to
-    subclasses through :meth:`_append`. Activations are converted to
+    Handles batch validation and sample counts, delegating storage to
+    subclasses through :meth:`_append_batch`. Activations are converted to
     ``float32`` before reaching the backend, so all stores share one dtype
     regardless of the precision the model ran at.
 
@@ -49,26 +49,17 @@ class ActivationWriter(ABC):
 
     def __init__(self) -> None:
         """Initialise an empty writer."""
-        self._ids: list[str] = []
-        self._metadata = RunMetadata()
+        self._sample_count = 0
 
     @property
+    @abstractmethod
     def sample_ids(self) -> list[str]:
         """Sample IDs written so far, in order."""
-        return self._ids
 
     @property
-    def metadata(self) -> RunMetadata:
-        """Run metadata stored alongside the activations.
-
-        Assign before :meth:`close` to record how the extraction was produced.
-        The HDF5 backend persists it as a JSON attribute.
-        """
-        return self._metadata
-
-    @metadata.setter
-    def metadata(self, value: RunMetadata) -> None:
-        self._metadata = value
+    def sample_count(self) -> int:
+        """Number of samples written so far."""
+        return self._sample_count
 
     @property
     @abstractmethod
@@ -76,26 +67,24 @@ class ActivationWriter(ABC):
         """Names of the layers seen so far, in first-write order."""
 
     @abstractmethod
-    def _append(self, name: str, act: np.ndarray) -> None:
-        """Append one batch of activations for a single layer.
+    def _append_batch(self, ids: list[str], activations: dict[str, np.ndarray]) -> None:
+        """Append a batch's IDs and layer activations together."""
 
-        Called once per layer per :meth:`write`, after validation. Subclasses
-        create their per-layer storage on the first call for a given ``name``,
-        sizing it from ``act.shape[1:]``.
+    def close(self, metadata: RunMetadata | None = None) -> ActivationStore:
+        """Finalise the written activations and return a store over them.
 
         Args:
-            name: Layer the activations came from.
-            act: Batch of activations, shape ``(batch_size, *act_shape)``,
-                already cast to ``float32``.
-        """
-
-    @abstractmethod
-    def close(self) -> ActivationStore:
-        """Finalise the written activations and return a store over them.
+            metadata: Optional run metadata to associate with the finished
+                store. The writer persists it using its backend.
 
         Returns:
             A read-only store exposing every sample written so far.
         """
+        return self._close(metadata)
+
+    @abstractmethod
+    def _close(self, metadata: RunMetadata | None) -> ActivationStore:
+        """Finalize this writer's backend and return its read-only store."""
 
     def write(self, ids: list[str], activations: dict[str, torch.Tensor]) -> None:
         """Append one batch of activations across all layers.
@@ -113,16 +102,14 @@ class ActivationWriter(ABC):
             ValueError: If a tensor's leading axis does not equal ``len(ids)``.
 
         Note:
-            Validation happens per layer as it is appended, so a batch that
-            fails partway may leave earlier layers of that batch written. The
-            sample IDs are only extended once every layer has succeeded, so a
-            failed write leaves the writer inconsistent and it should be
-            discarded rather than reused.
+            Validation completes before the batch is appended. A backend write
+            failure may still leave partial output; discard the writer then.
         """
-        assert set(activations) == set(self.layer_names) or not self._ids, (
+        assert set(activations) == set(self.layer_names) or not self._sample_count, (
             f"Batch has layers {sorted(activations)} but writer already holds "
             f"{sorted(self.layer_names)}."
         )
+        arrays: dict[str, np.ndarray] = {}
         for name, tensor in activations.items():
             act = tensor.detach().cpu().numpy().astype(np.float32, copy=False)
             if act.shape[0] != len(ids):
@@ -130,8 +117,9 @@ class ActivationWriter(ABC):
                     f"Layer '{name}' batch size {act.shape[0]} does not match "
                     f"{len(ids)} sample ids."
                 )
-            self._append(name, act)
-        self._ids.extend(ids)
+            arrays[name] = act
+        self._append_batch(ids, arrays)
+        self._sample_count += len(ids)
 
 
 @final
@@ -158,20 +146,25 @@ class MemoryActivationWriter(ActivationWriter):
     def __init__(self) -> None:
         """Initialise a writer with no buffered batches."""
         super().__init__()
-        self._batches: dict[str, list[np.ndarray]] = {}
+        self._batches: list[tuple[list[str], dict[str, np.ndarray]]] = []
+
+    @property
+    @override
+    def sample_ids(self) -> list[str]:
+        return [sample_id for ids, _ in self._batches for sample_id in ids]
 
     @property
     @override
     def layer_names(self) -> list[str]:
         """Names of the layers seen so far, in first-write order."""
-        return list(self._batches)
+        return list(self._batches[0][1]) if self._batches else []
 
     @override
-    def _append(self, name: str, act: np.ndarray) -> None:
-        self._batches.setdefault(name, []).append(act)
+    def _append_batch(self, ids: list[str], activations: dict[str, np.ndarray]) -> None:
+        self._batches.append((ids.copy(), activations))
 
     @override
-    def close(self) -> MemoryActivationStore:
+    def _close(self, metadata: RunMetadata | None) -> MemoryActivationStore:
         """Concatenate the buffered batches into a store.
 
         The writer is not reset and should not be reused afterwards.
@@ -180,13 +173,15 @@ class MemoryActivationWriter(ActivationWriter):
             A store holding one stacked tensor per layer.
         """
         activations = {
-            name: torch.from_numpy(np.concatenate(parts, axis=0))
-            for name, parts in self._batches.items()
+            name: torch.from_numpy(
+                np.concatenate([batch[name] for _, batch in self._batches], axis=0)
+            )
+            for name in self.layer_names
         }
         return MemoryActivationStore(
             activations=activations,
-            sample_ids=self._ids,
-            metadata=self._metadata,
+            sample_ids=self.sample_ids,
+            metadata=metadata,
         )
 
 
@@ -199,10 +194,9 @@ class H5ActivationWriter(ActivationWriter):
     number of samples. The file is created — and truncated, if it already
     exists — on construction, and closed by :meth:`close`.
 
-    The sample IDs and their hash are written last, by :meth:`close`. A file
-    whose writer never closed is therefore missing them and will not load
-    through :meth:`~nnact.store._store.H5ActivationStore.load`, which is the
-    intended behaviour: an interrupted run leaves no cache that looks valid.
+    Sample IDs are appended to the HDF5 file along with each batch. Their hash
+    is written on :meth:`close`, so an interrupted run does not leave a cache
+    that validates through :meth:`~nnact.store._store.H5ActivationStore.load`.
 
     Example:
         >>> writer = H5ActivationWriter(Path("acts.h5"))  # doctest: +SKIP
@@ -227,6 +221,9 @@ class H5ActivationWriter(ActivationWriter):
         self._file = h5py.File(self._path, "w")
         self._layers = self._file.create_group(LAYERS_GROUP)
         self._datasets: dict[str, h5py.Dataset] = {}
+        self._ids_dataset = self._file.create_dataset(
+            IDS_KEY, shape=(0,), maxshape=(None,), dtype=STR_DTYPE
+        )
 
     @property
     def path(self) -> Path:
@@ -238,6 +235,12 @@ class H5ActivationWriter(ActivationWriter):
     def layer_names(self) -> list[str]:
         """Names of the layers seen so far, in first-write order."""
         return list(self._datasets)
+
+    @property
+    @override
+    def sample_ids(self) -> list[str]:
+        """Read IDs already written to the HDF5 dataset."""
+        return list(self._ids_dataset.asstr()[...])
 
     def _dataset(self, name: str, shape: tuple[int, ...]) -> h5py.Dataset:
         """Return the dataset for ``name``, creating it on first use.
@@ -264,15 +267,20 @@ class H5ActivationWriter(ActivationWriter):
         return ds
 
     @override
-    def _append(self, name: str, act: np.ndarray) -> None:
-        ds = self._dataset(name, act.shape[1:])
-        start = ds.shape[0]
-        ds.resize(start + act.shape[0], axis=0)
-        ds[start : start + act.shape[0]] = act
+    def _append_batch(self, ids: list[str], activations: dict[str, np.ndarray]) -> None:
+        for name, act in activations.items():
+            ds = self._dataset(name, act.shape[1:])
+            start = ds.shape[0]
+            ds.resize(start + act.shape[0], axis=0)
+            ds[start : start + act.shape[0]] = act
+
+        start = self._ids_dataset.shape[0]
+        self._ids_dataset.resize(start + len(ids), axis=0)
+        self._ids_dataset[start : start + len(ids)] = ids
 
     @override
-    def close(self) -> H5ActivationStore:
-        """Write the sample IDs and hash, close the file, and return a store.
+    def _close(self, metadata: RunMetadata | None) -> H5ActivationStore:
+        """Write the sample ID hash, close the file, and return a store.
 
         The writer must not be used afterwards; the file handle is closed and
         further writes will fail.
@@ -284,15 +292,13 @@ class H5ActivationWriter(ActivationWriter):
             OSError: If the trailing metadata cannot be written or the file
                 cannot be closed cleanly.
         """
-        self._file.attrs[HASH_KEY] = sample_id_hash(self._ids)
+        ids = self.sample_ids
+        self._file.attrs[HASH_KEY] = sample_id_hash(ids)
         self._file.attrs[METADATA_KEY] = json.dumps(
-            self._metadata.to_dict(), default=str
-        )
-        self._file.create_dataset(
-            IDS_KEY, data=np.array(self._ids, dtype=object), dtype=STR_DTYPE
+            (metadata or RunMetadata()).to_dict(), default=str
         )
         layer_names = self.layer_names
         self._file.close()
         return H5ActivationStore(
-            path=self._path, layer_names=layer_names, sample_ids=self._ids
+            path=self._path, layer_names=layer_names, sample_ids=ids
         )

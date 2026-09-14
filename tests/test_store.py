@@ -48,6 +48,23 @@ def test_roundtrip_preserves_order_and_values(
     store.close()
 
 
+def test_h5_writer_appends_ids_with_each_batch(h5_path: Path) -> None:
+    """IDs are persisted as each activation batch is written."""
+    writer = H5ActivationWriter(h5_path)
+
+    writer.write(["a", "b"], {"l": torch.zeros(2, 4)})
+    assert writer.sample_ids == ["a", "b"]
+    assert writer.sample_count == 2
+
+    writer.write(["c"], {"l": torch.ones(1, 4)})
+    assert writer.sample_ids == ["a", "b", "c"]
+    assert writer.sample_count == 3
+
+    store = writer.close()
+    assert store.sample_ids == ["a", "b", "c"]
+    store.close()
+
+
 def test_getitem_returns_layers_in_declared_order(
     written_store: StoreFactory, identifiable: ActivationFactory
 ) -> None:
