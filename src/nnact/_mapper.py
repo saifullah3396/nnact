@@ -1,15 +1,14 @@
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, final, overload
+from typing import TYPE_CHECKING, Any, final, overload
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
 
 from nnact._model import HookedModel
-from nnact._types import RunMetadata, Sample
+from nnact._types import RunMetadata
 from nnact.store import (
     ActivationStore,
     ActivationWriter,
@@ -94,10 +93,34 @@ def _model_device(model: nn.Module, override: torch.device | str | None) -> str:
         return _describe_device(torch.device(override)) if override else "cpu"
 
 
-def _collate_samples(batch: list[Sample]) -> tuple[list[str], torch.Tensor]:
-    ids = [s.id for s in batch]
-    stacked = torch.stack([s.data for s in batch])  # type: ignore[arg-type]
-    return ids, stacked
+def _move_tensors(value: object, device: torch.device | str) -> object:
+    """Move tensor leaves while preserving the caller's batch structure."""
+    if isinstance(value, torch.Tensor):
+        return value.to(device)
+    if isinstance(value, Mapping):
+        return {key: _move_tensors(item, device) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_move_tensors(item, device) for item in value)
+    if isinstance(value, list):
+        return [_move_tensors(item, device) for item in value]
+    return value
+
+
+def _split_batch(batch: Mapping[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Separate required sample IDs from keyword arguments for the model."""
+    if "id" not in batch:
+        raise ValueError('Each loader batch must contain an "id" field.')
+
+    ids = batch["id"]
+    if isinstance(ids, str) or not isinstance(ids, Iterable):
+        raise TypeError('Batch "id" must be an iterable of sample ID strings.')
+
+    ids = list(ids)
+    if not all(isinstance(sample_id, str) for sample_id in ids):
+        raise TypeError('Batch "id" must contain only strings.')
+
+    model_inputs = {key: value for key, value in batch.items() if key != "id"}
+    return ids, model_inputs
 
 
 @final
@@ -208,12 +231,10 @@ class ActivationMapper:
     @overload
     def map(
         self,
-        dataset: Dataset[Sample],
+        loader: Iterable[Mapping[str, Any]],
         layer_names: str | list[str],
         path: None = None,
         writer: None = None,
-        batch_size: int = 256,
-        num_workers: int = 0,
         device: torch.device | str | None = None,
         progress: bool = True,
     ) -> MemoryActivationStore: ...
@@ -221,12 +242,10 @@ class ActivationMapper:
     @overload
     def map(
         self,
-        dataset: Dataset[Sample],
+        loader: Iterable[Mapping[str, Any]],
         layer_names: str | list[str],
         path: Path,
         writer: None = None,
-        batch_size: int = 256,
-        num_workers: int = 0,
         device: torch.device | str | None = None,
         progress: bool = True,
     ) -> H5ActivationStore: ...
@@ -234,44 +253,40 @@ class ActivationMapper:
     @overload
     def map(
         self,
-        dataset: Dataset[Sample],
+        loader: Iterable[Mapping[str, Any]],
         layer_names: str | list[str],
         path: Path | None = None,
         *,
         writer: ActivationWriter,
-        batch_size: int = 256,
-        num_workers: int = 0,
         device: torch.device | str | None = None,
         progress: bool = True,
     ) -> ActivationStore: ...
 
     def map(
         self,
-        dataset: Dataset[Sample],
+        loader: Iterable[Mapping[str, Any]],
         layer_names: str | list[str],
         path: Path | None = None,
         writer: ActivationWriter | None = None,
-        batch_size: int = 256,
-        num_workers: int = 0,
         device: torch.device | str | None = None,
         progress: bool = True,
     ) -> ActivationStore:
-        """Run the model over ``dataset`` and store the captured activations.
+        """Run the model over pre-batched inputs and store its activations.
 
         Args:
-            dataset: Yields :class:`~nnact._types.Sample` items. Consumed in
-                order, so position ``i`` of the store is the ``i``-th sample.
+            loader: A caller-configured batch iterable, usually a DataLoader,
+                yielding mappings with an ``"id"`` field and model input
+                fields. IDs must be a batch of strings. All other fields are
+                passed to the model as keyword arguments, so the model's
+                ``forward`` parameter names define their meaning. The loader
+                owns dataset access and collation.
             layer_names: Layer or layers to capture, named as in
                 :meth:`available_layers`.
             path: Destination for an HDF5 cache. When omitted, activations are
                 kept in memory.
             writer: Supply a writer directly, overriding ``path``.
-            batch_size: Samples per forward pass.
-            num_workers: DataLoader worker processes. Leave at ``0`` when
-                writing to HDF5, since an open file handle does not survive
-                ``fork``.
-            device: Device to move batches to. The model is not moved; do that
-                yourself beforehand.
+            device: Device to move tensor leaves to. Other batch values are
+                preserved. The model is not moved; do that yourself beforehand.
             progress: Show a tqdm progress bar over the batches. Silently
                 skipped if tqdm is not installed.
 
@@ -290,14 +305,6 @@ class ActivationMapper:
         names = _as_list(layer_names)
         self._check_layers(names)
 
-        loader: DataLoader[Sample] = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=_collate_samples,  # type: ignore[arg-type]
-        )
-
         if writer is None:
             writer = (
                 MemoryActivationWriter() if path is None else H5ActivationWriter(path)
@@ -311,11 +318,14 @@ class ActivationMapper:
         )
         started = time.perf_counter()
         with torch.no_grad():
-            for ids, data in batches:  # type: ignore[misc]
+            for batch in batches:
+                if not isinstance(batch, Mapping):
+                    raise TypeError("Each loader batch must be a mapping.")
+                ids, model_inputs = _split_batch(batch)
                 if device is not None:
-                    data = data.to(device)
+                    model_inputs = _move_tensors(model_inputs, device)
                 with hooked.capture(names):
-                    hooked(data)
+                    hooked(**model_inputs)
                     activations = {name: hooked.get_activation(name) for name in names}
                     writer.write(ids, activations)
         elapsed = time.perf_counter() - started
@@ -325,7 +335,7 @@ class ActivationMapper:
             parameters=self.parameter_count(),
             layers=names,
             samples=len(writer.sample_ids),
-            batch_size=batch_size,
+            batch_size=getattr(loader, "batch_size", None) or 0,
             device=_model_device(self._model, device),
             seconds=elapsed,
             created=datetime.now(UTC).isoformat(timespec="seconds"),

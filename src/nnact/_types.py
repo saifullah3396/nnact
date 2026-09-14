@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass, field
-from typing import Any, Self
+from typing import Any, Protocol, Self
 
 import torch
 
@@ -10,9 +10,22 @@ class LayerActivation:
     tensor: torch.Tensor
 
 
+class SampleLike(Protocol):
+    """Optional per-sample convention for datasets used by a DataLoader.
+
+    The mapper itself consumes batches from a caller-owned DataLoader. A
+    dataset may use this convenient ``id``/``data`` convention, but its data
+    can be any object and the caller's collate function decides how it becomes
+    model keyword inputs.
+    """
+
+    id: str
+    data: Any
+
+
 @dataclass(frozen=True, slots=True)
 class Sample:
-    """A raw input sample for activation collection."""
+    """Convenient ``id``/``data`` sample convention for caller datasets."""
 
     id: str
     data: Any

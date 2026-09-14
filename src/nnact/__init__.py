@@ -6,6 +6,7 @@ from nnact._types import (
     ModelOutput,
     RunMetadata,
     Sample,
+    SampleLike,
 )
 from nnact.store import (
     ActivationStore,
@@ -30,4 +31,5 @@ __all__ = [
     "ModelOutput",
     "RunMetadata",
     "Sample",
+    "SampleLike",
 ]
