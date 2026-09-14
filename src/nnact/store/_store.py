@@ -270,6 +270,7 @@ class MemoryActivationStore(ActivationStore):
     @override
     def __getitem__(self, idx: int) -> ActivatedSample:
         return ActivatedSample(
+            id=self._sample_ids[idx],
             activations=[
                 LayerActivation(layer_name=name, tensor=tensor[idx])
                 for name, tensor in self._activations.items()
@@ -398,7 +399,7 @@ class H5ActivationStore(ActivationStore):
             )
             for name in self._layer_names
         ]
-        return ActivatedSample(activations=activations)
+        return ActivatedSample(id=self._sample_ids[idx], activations=activations)
 
     @override
     def layer_shape(self, layer_name: str) -> tuple[int, ...]:

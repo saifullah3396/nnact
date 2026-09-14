@@ -35,6 +35,7 @@ class Sample:
 class ActivatedSample:
     """Activations captured from one or more layers for a single sample."""
 
+    id: str
     activations: list[LayerActivation]
 
 
