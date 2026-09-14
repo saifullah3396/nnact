@@ -9,5 +9,6 @@
         "**/__pycache__": true,
         "**/.claude": true,
         "**/.pytest_cache": true,
+        "**/.ruff_cache": true,
     }
 }
