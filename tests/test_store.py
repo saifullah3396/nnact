@@ -254,3 +254,21 @@ def test_activations_property_is_stacked(
     stacked = store.activations["l"]
     assert stacked.shape == (3, 4)
     assert torch.equal(stacked[:, 0], torch.tensor([0.0, 1.0, 2.0]))
+
+
+def test_summary_tabulates_layers(written_store: StoreFactory) -> None:
+    """summary() reports per-sample shape and total bytes for every layer."""
+    store = written_store(
+        {"a": torch.zeros(4, 8), "b": torch.zeros(4, 2, 3)}, ["w", "x", "y", "z"]
+    )
+
+    frame = store.summary()
+
+    assert list(frame.index) == ["a", "b"]
+    assert list(frame.columns) == ["shape", "elements", "bytes"]
+    assert frame.loc["a", "shape"] == (8,)
+    assert frame.loc["b", "shape"] == (2, 3)
+    assert frame.loc["b", "elements"] == 6
+    assert frame.loc["b", "bytes"] == 6 * 4 * 4
+    assert store.layer_shape("a") == (8,)
+    store.close()

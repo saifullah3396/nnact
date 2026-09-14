@@ -34,7 +34,7 @@ def test_matches_manual_forward(
     right, not merely that they have plausible shapes.
     """
     dataset = tiny_dataset(n=7)
-    store = ActivationMapper(tiny_model, ["fc1", "fc2"], batch_size=3).map(dataset)
+    store = ActivationMapper(tiny_model).map(dataset, ["fc1", "fc2"], batch_size=3)
 
     stacked = torch.stack([dataset[i].data for i in range(len(dataset))])
     tiny_model.eval()
@@ -101,7 +101,7 @@ def test_defaults_to_memory(
     tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
 ) -> None:
     """With no path, activations stay in memory and no file is written."""
-    store = ActivationMapper(tiny_model, "fc1", batch_size=2).map(tiny_dataset(n=5))
+    store = ActivationMapper(tiny_model).map(tiny_dataset(n=5), "fc1", batch_size=2)
 
     assert isinstance(store, MemoryActivationStore)
     assert len(store) == 5
@@ -117,20 +117,24 @@ def test_path_selects_h5_and_explicit_writer_wins(
 ) -> None:
     """A path selects the HDF5 backend; an explicit writer overrides it."""
     dataset = tiny_dataset(n=4)
-    mapper = ActivationMapper(tiny_model, "fc1", batch_size=2)
+    mapper = ActivationMapper(tiny_model)
 
-    store = mapper.map(dataset, h5_path)
+    store = mapper.map(dataset, "fc1", h5_path, batch_size=2)
     assert isinstance(store, H5ActivationStore)
     assert h5_path.exists()
     store.close()
 
     unused_path = tmp_path / "ignored.h5"
-    memory_store = mapper.map(dataset, unused_path, writer=MemoryActivationWriter())
+    memory_store = mapper.map(
+        dataset, "fc1", unused_path, writer=MemoryActivationWriter(), batch_size=2
+    )
     assert isinstance(memory_store, MemoryActivationStore)
     assert not unused_path.exists()
 
     explicit_path = tmp_path / "explicit.h5"
-    h5_store = mapper.map(dataset, writer=H5ActivationWriter(explicit_path))
+    h5_store = mapper.map(
+        dataset, "fc1", writer=H5ActivationWriter(explicit_path), batch_size=2
+    )
     assert isinstance(h5_store, H5ActivationStore)
     assert explicit_path.exists()
     h5_store.close()
@@ -149,10 +153,76 @@ def test_model_in_eval_and_no_grad(
     model = TrainModeProbe()
     model.train()
 
-    store = ActivationMapper(model, "drop", batch_size=2).map(tiny_dataset(n=4))
+    store = ActivationMapper(model).map(tiny_dataset(n=4), "drop", batch_size=2)
 
-    assert isinstance(store, MemoryActivationStore)
     activations = store.activations["drop"]
     assert activations.abs().sum() > 0, "activations are zero, model ran in train mode"
     assert not activations.requires_grad
     assert activations.grad_fn is None
+
+
+def test_map_rejects_unknown_layer(
+    tiny_model: TinyMLP, tiny_dataset: DatasetFactory
+) -> None:
+    """A bad layer name fails before any forward pass, naming near misses."""
+    mapper = ActivationMapper(tiny_model)
+
+    with pytest.raises(ValueError, match="not found in TinyMLP") as excinfo:
+        mapper.map(tiny_dataset(n=4), ["fc1", "fc3"])
+
+    message = str(excinfo.value)
+    assert "fc3" in message
+    assert "fc1" in message
+
+
+def test_summary_lists_and_marks_layers(tiny_model: TinyMLP) -> None:
+    """summary() reports hookable layers and flags ones absent from the model."""
+    mapper = ActivationMapper(tiny_model)
+
+    assert mapper.available_layers() == ["fc1", "fc2"]
+    assert mapper.parameter_count() == sum(p.numel() for p in tiny_model.parameters())
+
+    frame = mapper.summary(["fc1"])
+    assert list(frame.index) == ["fc1", "fc2"]
+    assert list(frame.columns) == ["module", "parameters", "selected"]
+    assert frame.loc["fc1", "module"] == "Linear"
+    assert frame.loc["fc1", "selected"]
+    assert not frame.loc["fc2", "selected"]
+    assert frame["parameters"].sum() == mapper.parameter_count()
+
+    assert "selected" not in mapper.summary().columns
+
+
+def test_map_records_run_metadata(
+    tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
+) -> None:
+    """Metadata describing the run is stored with the activations."""
+    store = ActivationMapper(tiny_model).map(
+        tiny_dataset(n=6), ["fc1", "fc2"], batch_size=2, progress=False
+    )
+
+    metadata = store.metadata
+    assert metadata.model == "TinyMLP"
+    assert metadata.layers == ["fc1", "fc2"]
+    assert metadata.samples == 6
+    assert metadata.batch_size == 2
+    assert metadata.parameters == sum(p.numel() for p in tiny_model.parameters())
+    assert isinstance(metadata.seconds, float)
+    assert metadata.created
+    assert metadata.samples_per_second > 0
+
+
+def test_h5_metadata_survives_roundtrip(
+    tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
+) -> None:
+    """HDF5 persists the metadata, so a reloaded cache says how it was made."""
+    written = ActivationMapper(tiny_model).map(
+        tiny_dataset(n=4), "fc1", h5_path, batch_size=2, progress=False
+    )
+    expected = written.metadata
+    written.close()
+
+    reloaded = H5ActivationStore.load(h5_path, [f"sample_{i}" for i in range(4)])
+    assert reloaded.metadata == expected
+    assert reloaded.metadata.model == "TinyMLP"
+    reloaded.close()

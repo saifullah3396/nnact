@@ -32,6 +32,9 @@ IDS_KEY = "sample_ids"
 LAYERS_GROUP = "layers"
 """Root group containing one subgroup per captured layer."""
 
+METADATA_KEY = "metadata"
+"""Root attribute holding run metadata as a JSON object."""
+
 STR_DTYPE = h5py.string_dtype(encoding="utf-8")
 """Variable-length UTF-8 dtype used for the sample ID dataset."""
 

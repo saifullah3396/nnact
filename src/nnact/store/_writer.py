@@ -14,6 +14,7 @@ Two implementations are provided:
 * :class:`H5ActivationWriter` streams batches into an HDF5 file.
 """
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import final, override
@@ -22,7 +23,15 @@ import h5py
 import numpy as np
 import torch
 
-from nnact.store._keys import HASH_KEY, IDS_KEY, LAYERS_GROUP, STR_DTYPE, sample_id_hash
+from nnact._types import RunMetadata
+from nnact.store._keys import (
+    HASH_KEY,
+    IDS_KEY,
+    LAYERS_GROUP,
+    METADATA_KEY,
+    STR_DTYPE,
+    sample_id_hash,
+)
 from nnact.store._store import ActivationStore, H5ActivationStore, MemoryActivationStore
 
 
@@ -41,11 +50,25 @@ class ActivationWriter(ABC):
     def __init__(self) -> None:
         """Initialise an empty writer."""
         self._ids: list[str] = []
+        self._metadata = RunMetadata()
 
     @property
     def sample_ids(self) -> list[str]:
         """Sample IDs written so far, in order."""
         return self._ids
+
+    @property
+    def metadata(self) -> RunMetadata:
+        """Run metadata stored alongside the activations.
+
+        Assign before :meth:`close` to record how the extraction was produced.
+        The HDF5 backend persists it as a JSON attribute.
+        """
+        return self._metadata
+
+    @metadata.setter
+    def metadata(self, value: RunMetadata) -> None:
+        self._metadata = value
 
     @property
     @abstractmethod
@@ -160,7 +183,11 @@ class MemoryActivationWriter(ActivationWriter):
             name: torch.from_numpy(np.concatenate(parts, axis=0))
             for name, parts in self._batches.items()
         }
-        return MemoryActivationStore(activations=activations, sample_ids=self._ids)
+        return MemoryActivationStore(
+            activations=activations,
+            sample_ids=self._ids,
+            metadata=self._metadata,
+        )
 
 
 @final
@@ -258,6 +285,9 @@ class H5ActivationWriter(ActivationWriter):
                 cannot be closed cleanly.
         """
         self._file.attrs[HASH_KEY] = sample_id_hash(self._ids)
+        self._file.attrs[METADATA_KEY] = json.dumps(
+            self._metadata.to_dict(), default=str
+        )
         self._file.create_dataset(
             IDS_KEY, data=np.array(self._ids, dtype=object), dtype=STR_DTYPE
         )

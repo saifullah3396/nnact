@@ -13,17 +13,27 @@ Both are produced by the corresponding writer in :mod:`nnact.store._writer`;
 construct them directly only when you already hold the underlying data.
 """
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import final, override
+from typing import TYPE_CHECKING, final, override
 
 import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from nnact._types import ActivatedSample, LayerActivation
-from nnact.store._keys import HASH_KEY, IDS_KEY, LAYERS_GROUP, sample_id_hash
+from nnact._types import ActivatedSample, LayerActivation, RunMetadata
+from nnact.store._keys import (
+    HASH_KEY,
+    IDS_KEY,
+    LAYERS_GROUP,
+    METADATA_KEY,
+    sample_id_hash,
+)
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def _dataset(f: h5py.File, key: str) -> h5py.Dataset:
@@ -99,6 +109,16 @@ class ActivationStore(Dataset[ActivatedSample], ABC):
     def layer_names(self) -> list[str]:
         """Names of the layers held by this store."""
 
+    @property
+    def metadata(self) -> RunMetadata:
+        """Run metadata recorded when the activations were written.
+
+        Populated by :class:`~nnact.ActivationMapper` with the model, the
+        layers captured, the sample and batch counts, and the wall-clock
+        duration. Default-constructed for a store built by hand.
+        """
+        return RunMetadata()
+
     @abstractmethod
     def __len__(self) -> int:
         """Return the number of samples in the store."""
@@ -115,6 +135,49 @@ class ActivationStore(Dataset[ActivatedSample], ABC):
             :class:`~nnact._types.LayerActivation` per layer, ordered to match
             :attr:`layer_names`.
         """
+
+    @abstractmethod
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
+        """Return the per-sample activation shape for one layer.
+
+        Args:
+            layer_name: One of :attr:`layer_names`.
+
+        Returns:
+            The shape of a single sample's activation, excluding the leading
+            sample axis.
+        """
+
+    def summary(self) -> "pd.DataFrame":
+        """Tabulate the stored layers as a :class:`pandas.DataFrame`.
+
+        Reports the per-sample shape and the total bytes held for each layer,
+        which is what you need to decide whether an extraction fits in memory.
+
+        Returns:
+            One row per layer, indexed by layer name, with columns
+            ``shape`` (per sample), ``elements`` (per sample), and ``bytes``
+            (for the whole store, as float32).
+
+        Raises:
+            ImportError: If pandas is not installed. It is not a dependency of
+                ``nnact``; read :attr:`layer_names` and :meth:`layer_shape`
+                instead.
+        """
+        import pandas as pd
+
+        names = self.layer_names
+        shapes = [self.layer_shape(name) for name in names]
+        elements = [int(np.prod(shape, dtype=np.int64)) for shape in shapes]
+
+        return pd.DataFrame(
+            {
+                "shape": [tuple(shape) for shape in shapes],
+                "elements": elements,
+                "bytes": [count * len(self) * 4 for count in elements],
+            },
+            index=pd.Index(names, name="layer"),
+        )
 
     def close(self) -> None:
         """Release any resources held by the store.
@@ -146,7 +209,10 @@ class MemoryActivationStore(ActivationStore):
     """
 
     def __init__(
-        self, activations: dict[str, torch.Tensor], sample_ids: list[str]
+        self,
+        activations: dict[str, torch.Tensor],
+        sample_ids: list[str],
+        metadata: RunMetadata | None = None,
     ) -> None:
         """Initialise the store from stacked per-layer tensors.
 
@@ -156,6 +222,7 @@ class MemoryActivationStore(ActivationStore):
                 mutate it afterwards.
             sample_ids: Sample IDs in the same positional order as the leading
                 axis of every tensor in ``activations``.
+            metadata: Run metadata to expose as :attr:`metadata`.
 
         Raises:
             AssertionError: If any layer's leading axis does not equal
@@ -168,6 +235,13 @@ class MemoryActivationStore(ActivationStore):
             )
         self._activations = activations
         self._sample_ids = sample_ids
+        self._metadata = metadata or RunMetadata()
+
+    @property
+    @override
+    def metadata(self) -> RunMetadata:
+        """Run metadata recorded when the activations were written."""
+        return self._metadata
 
     @property
     @override
@@ -201,6 +275,10 @@ class MemoryActivationStore(ActivationStore):
                 for name, tensor in self._activations.items()
             ]
         )
+
+    @override
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
+        return tuple(self._activations[layer_name].shape[1:])
 
 
 @final
@@ -261,6 +339,26 @@ class H5ActivationStore(ActivationStore):
 
     @property
     @override
+    def metadata(self) -> RunMetadata:
+        """Run metadata read back from the file's JSON attribute.
+
+        Default-constructed if the file predates metadata support or the
+        attribute does not parse, so a missing record never blocks reading
+        activations.
+        """
+        raw = self._open().attrs.get(METADATA_KEY)
+        if raw is None:
+            return RunMetadata()
+        try:
+            loaded = json.loads(raw if isinstance(raw, str) else bytes(raw).decode())
+        except (ValueError, UnicodeDecodeError):
+            return RunMetadata()
+        if not isinstance(loaded, dict):
+            return RunMetadata()
+        return RunMetadata.from_dict(loaded)
+
+    @property
+    @override
     def sample_ids(self) -> list[str]:
         """Sample IDs in positional order."""
         return self._sample_ids
@@ -301,6 +399,11 @@ class H5ActivationStore(ActivationStore):
             for name in self._layer_names
         ]
         return ActivatedSample(activations=activations)
+
+    @override
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
+        dataset = _dataset(self._open(), f"{LAYERS_GROUP}/{layer_name}/activations")
+        return tuple(dataset.shape[1:])
 
     @override
     def close(self) -> None:

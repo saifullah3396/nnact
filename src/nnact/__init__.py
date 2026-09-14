@@ -1,6 +1,12 @@
 from nnact._mapper import ActivationMapper
 from nnact._model import HookedModel
-from nnact._types import ActivatedSample, LayerActivation, ModelOutput, Sample
+from nnact._types import (
+    ActivatedSample,
+    LayerActivation,
+    ModelOutput,
+    RunMetadata,
+    Sample,
+)
 from nnact.store import (
     ActivationStore,
     ActivationWriter,
@@ -22,5 +28,6 @@ __all__ = [
     "MemoryActivationStore",
     "MemoryActivationWriter",
     "ModelOutput",
+    "RunMetadata",
     "Sample",
 ]
