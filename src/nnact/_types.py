@@ -30,7 +30,28 @@ class ModelOutput:
     logits: torch.Tensor
 
 
-@dataclass(frozen=True, slots=True)
+def _format_count(value: int) -> str:
+    """Abbreviate a large count, e.g. ``11689512`` to ``11.7M``."""
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(value) >= limit:
+            return f"{value / limit:.1f}{suffix}"
+    return str(value)
+
+
+def _format_duration(seconds: float) -> str:
+    """Render a duration at a readable scale, from microseconds to hours."""
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)}h{int(seconds % 3600 // 60):02d}m"
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m{seconds % 60:04.1f}s"
+    if seconds >= 1:
+        return f"{seconds:.2f}s"
+    if seconds >= 1e-3:
+        return f"{seconds * 1e3:.1f}ms"
+    return f"{seconds * 1e6:.0f}us"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RunMetadata:
     """How an activation store was produced.
 
@@ -44,7 +65,10 @@ class RunMetadata:
         layers: Layers captured, in the order the store exposes them.
         samples: Number of samples written.
         batch_size: Samples per forward pass.
-        device: Device batches were moved to, or ``"cpu"``.
+        device: Hardware the forward passes ran on — ``"cpu"``, or the GPU's
+            model name such as ``"NVIDIA GeForce RTX 3060 (cuda:0)"``. Not
+            where the activations were stored: those are always float32 on
+            CPU, whatever the model ran on.
         seconds: Wall-clock duration of the extraction.
         created: UTC ISO-8601 timestamp taken when the run finished.
         extra: Anything else the caller chose to record.
@@ -64,6 +88,33 @@ class RunMetadata:
     def samples_per_second(self) -> float:
         """Throughput of the run, or ``0.0`` if it was too fast to measure."""
         return self.samples / self.seconds if self.seconds else 0.0
+
+    def __repr__(self) -> str:
+        """Render one field per line, in the style of a pydantic model.
+
+        Counts are abbreviated and the duration is scaled, since the exact
+        parameter count and a full float of seconds are rarely what you want
+        to read. Every field remains available as an attribute.
+        """
+        fields: list[tuple[str, str]] = [
+            ("model", self.model),
+            ("parameters", _format_count(self.parameters)),
+            ("layers", ", ".join(self.layers)),
+            ("samples", f"{self.samples:,}"),
+            ("batch_size", str(self.batch_size)),
+            ("device", self.device),
+            ("seconds", _format_duration(self.seconds)),
+            ("throughput", f"{_format_count(int(self.samples_per_second))}/s"),
+            ("created", self.created),
+        ]
+        if self.extra:
+            fields.append(("extra", repr(self.extra)))
+
+        width = max(len(name) for name, _ in fields)
+        lines = [f"{type(self).__name__}("]
+        lines.extend(f"    {name:<{width}} = {value}" for name, value in fields)
+        lines.append(")")
+        return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable mapping of every field."""

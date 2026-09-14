@@ -11,6 +11,7 @@ import torch
 
 from nnact._mapper import ActivationMapper
 from nnact._model import HookedModel
+from nnact._types import RunMetadata
 from nnact.store import (
     H5ActivationStore,
     H5ActivationWriter,
@@ -226,3 +227,46 @@ def test_h5_metadata_survives_roundtrip(
     assert reloaded.metadata == expected
     assert reloaded.metadata.model == "TinyMLP"
     reloaded.close()
+
+
+def test_metadata_repr_is_readable() -> None:
+    """The repr lists one field per line, abbreviating counts and duration."""
+    text = repr(
+        RunMetadata(
+            model="ResNet",
+            parameters=11_689_512,
+            layers=["layer3", "layer4"],
+            samples=512,
+            batch_size=64,
+            device="cpu",
+            seconds=2.804,
+            created="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+    lines = text.splitlines()
+    assert lines[0] == "RunMetadata("
+    assert lines[-1] == ")"
+    assert "    model      = ResNet" in lines
+    assert "    parameters = 11.7M" in lines
+    assert "    seconds    = 2.80s" in lines
+    assert "11689512" not in text
+
+    assert "seconds    = 420us" in repr(RunMetadata(seconds=0.00042))
+    assert "extra" not in repr(RunMetadata(model="M"))
+
+
+def test_metadata_reports_actual_device(
+    tiny_model: TinyMLP, tiny_dataset: DatasetFactory
+) -> None:
+    """The device recorded is the model's own, not the argument passed.
+
+    A model already on an accelerator runs there whether or not ``device`` was
+    given, so trusting the argument would misreport the run.
+    """
+    store = ActivationMapper(tiny_model).map(
+        tiny_dataset(n=4), "fc1", batch_size=2, progress=False
+    )
+
+    assert store.metadata.device == "cpu"
+    assert next(tiny_model.parameters()).device.type == "cpu"

@@ -53,6 +53,47 @@ def _with_progress[T](
     return tqdm(batches, desc=f"{label} activations", unit="batch")
 
 
+def _describe_device(device: torch.device) -> str:
+    """Name the hardware behind a device, not just its index.
+
+    ``cuda:0`` says nothing about which card ran a job, which is what makes a
+    recorded duration interpretable later.
+
+    Args:
+        device: The device to describe.
+
+    Returns:
+        The GPU's model name with its index, or the plain device type for CPU
+        and for accelerators exposing no name.
+    """
+    if device.type == "cuda" and torch.cuda.is_available():
+        index = (
+            device.index if device.index is not None else torch.cuda.current_device()
+        )
+        return f"{torch.cuda.get_device_name(index)} (cuda:{index})"
+    return str(device)
+
+
+def _model_device(model: nn.Module, override: torch.device | str | None) -> str:
+    """Report the device the model's forward passes actually ran on.
+
+    Prefers the model's own parameters over the ``device`` argument, since a
+    model already living on a GPU runs there whether or not a device was
+    passed. Falls back to the argument for parameterless models.
+
+    Args:
+        model: The model that was run.
+        override: The ``device`` argument given to :meth:`ActivationMapper.map`.
+
+    Returns:
+        A human-readable device description.
+    """
+    try:
+        return _describe_device(next(model.parameters()).device)
+    except StopIteration:
+        return _describe_device(torch.device(override)) if override else "cpu"
+
+
 def _collate_samples(batch: list[Sample]) -> tuple[list[str], torch.Tensor]:
     ids = [s.id for s in batch]
     stacked = torch.stack([s.data for s in batch])  # type: ignore[arg-type]
@@ -285,7 +326,7 @@ class ActivationMapper:
             layers=names,
             samples=len(writer.sample_ids),
             batch_size=batch_size,
-            device=str(device) if device is not None else "cpu",
+            device=_model_device(self._model, device),
             seconds=elapsed,
             created=datetime.now(UTC).isoformat(timespec="seconds"),
         )
