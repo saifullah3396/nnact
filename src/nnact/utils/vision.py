@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 
 class Cifar10Samples(Dataset[dict[str, Any]]):
-    """CIFAR-10 images prepared as model keyword inputs with stable IDs.
+    """CIFAR-10 images prepared as model keyword inputs.
 
     The optional ``datasets`` and ``torchvision`` packages are imported only
     when the dataset is instantiated.
@@ -35,7 +35,4 @@ class Cifar10Samples(Dataset[dict[str, Any]]):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         row = self._dataset[idx]
-        return {
-            "id": f"cifar_{idx:05d}_{self.class_names[row['label']]}",
-            "x": self._transform(row["img"].convert("RGB")),
-        }
+        return {"x": self._transform(row["img"].convert("RGB"))}

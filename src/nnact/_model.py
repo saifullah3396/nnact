@@ -6,21 +6,22 @@ import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
 
-from nnact._types import LayerActivation, ModelOutput
+from nnact._types import LayerActivation
 
 
 @final
 class HookedModel(nn.Module):
-    """Wraps any nn.Module to extract layer activations via forward hooks."""
+    """Wraps any nn.Module to extract layer activations via forward hooks.
 
-    def __init__(
-        self,
-        model: nn.Module,
-        output_transform: Callable[[object], ModelOutput] | None = None,
-    ) -> None:
+    Returns the model's raw output unchanged -- callers wanting derived
+    per-sample/per-token fields (see `nnact.adapters`) apply their own
+    transform to that raw output themselves, since only the caller has both
+    the output and the batch's inputs in scope at the same time.
+    """
+
+    def __init__(self, model: nn.Module) -> None:
         super().__init__()
         self.model = model
-        self.output_transform = output_transform
         self.activations: list[LayerActivation] = []
 
     def get_activation(self, layer_name: str) -> torch.Tensor:
@@ -75,7 +76,4 @@ class HookedModel(nn.Module):
 
     @override
     def forward(self, *args: object, **kwargs: object) -> object:
-        output = self.model(*args, **kwargs)  # pyright: ignore[reportAny]
-        if self.output_transform is not None:
-            return self.output_transform(output)
-        return output
+        return self.model(*args, **kwargs)  # pyright: ignore[reportAny]

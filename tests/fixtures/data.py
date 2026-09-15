@@ -1,6 +1,4 @@
-"""Activation tensors and paths used as test input."""
-
-from pathlib import Path
+"""Activation tensors used as test input."""
 
 import pytest
 import torch
@@ -22,9 +20,3 @@ def identifiable() -> ActivationFactory:
         return values[:, None].expand(n, dim).contiguous()
 
     return _make
-
-
-@pytest.fixture
-def h5_path(tmp_path: Path) -> Path:
-    """Path for a single HDF5 cache inside the test's temporary directory."""
-    return tmp_path / "acts.h5"

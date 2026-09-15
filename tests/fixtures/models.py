@@ -11,10 +11,8 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset
 
-from nnact._types import Sample
-
 DatasetFactory = Callable[..., "ListDataset"]
-"""Builds a dataset: ``(n=5, id_prefix="sample") -> ListDataset``."""
+"""Builds a dataset: ``(n=5) -> ListDataset``."""
 
 
 class TinyMLP(nn.Module):
@@ -77,16 +75,16 @@ class TrainModeProbe(nn.Module):
         return self.drop(self.fc(x))
 
 
-class ListDataset(Dataset[Sample]):
+class ListDataset(Dataset[torch.Tensor]):
     """Minimal in-memory Dataset over pre-built samples."""
 
-    def __init__(self, samples: list[Sample]) -> None:
+    def __init__(self, samples: list[torch.Tensor]) -> None:
         self._samples = samples
 
     def __len__(self) -> int:
         return len(self._samples)
 
-    def __getitem__(self, idx: int) -> Sample:
+    def __getitem__(self, idx: int) -> torch.Tensor:
         return self._samples[idx]
 
 
@@ -103,13 +101,8 @@ def tiny_dataset() -> DatasetFactory:
     Seeded so a failure reproduces on the next run.
     """
 
-    def _make(n: int = 5, id_prefix: str = "sample") -> ListDataset:
+    def _make(n: int = 5) -> ListDataset:
         generator = torch.Generator().manual_seed(0)
-        return ListDataset(
-            [
-                Sample(id=f"{id_prefix}_{i}", data=torch.randn(4, generator=generator))
-                for i in range(n)
-            ]
-        )
+        return ListDataset([torch.randn(4, generator=generator) for _ in range(n)])
 
     return _make

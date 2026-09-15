@@ -1,66 +1,26 @@
-from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, final, overload
+from collections.abc import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, cast, final
 
 import torch
-from ignite.engine import Engine
-from ignite.handlers import Timer
 from torch import nn
 
 from nnact._model import HookedModel
-from nnact._types import RunMetadata
-from nnact._utils import _as_list, _model_device, _move_tensors, _split_batch
-from nnact.store import (
-    ActivationStore,
-    ActivationWriter,
-    H5ActivationStore,
-    H5ActivationWriter,
-    MemoryActivationStore,
-    MemoryActivationWriter,
-)
+from nnact._types import SampleActivations
+from nnact._utils import _as_list, _move_tensors
 
 if TYPE_CHECKING:
     import pandas as pd
 
 
-class ActivationStep:
-    """Capture and write activations for one caller-provided batch."""
-
-    def __init__(
-        self,
-        model: nn.Module,
-        layer_names: list[str],
-        writer: ActivationWriter,
-        device: torch.device | str | None,
-    ) -> None:
-        self._model = HookedModel(model)
-        self._model.eval()
-        self._layer_names = layer_names
-        self._writer = writer
-        self._device = device
-
-    @torch.no_grad()
-    def __call__(self, _engine: Engine, batch: Mapping[str, Any]) -> int:
-        if not isinstance(batch, Mapping):
-            raise TypeError("Each loader batch must be a mapping.")
-
-        ids, model_inputs = _split_batch(batch)
-        if self._device is not None:
-            model_inputs = _move_tensors(model_inputs, self._device)
-
-        with self._model.capture(self._layer_names):
-            self._model(**model_inputs)
-            activations = {
-                name: self._model.get_activation(name) for name in self._layer_names
-            }
-            self._writer.write(ids, activations)
-
-        return len(ids)
-
-
 @final
 class ActivationMapper:
+    """Capture sample-level activations: one dense tensor per layer.
+
+    For a token-level probe over a sequence model, see
+    :class:`~nnact.TokenActivationMapper` instead, which trims padding and
+    returns real tokens only.
+    """
+
     def __init__(self, model: nn.Module) -> None:
         self._model = model
 
@@ -164,95 +124,43 @@ class ActivationMapper:
         )
         raise ValueError("\n".join(lines))
 
-    def _create_engine(
-        self, step: ActivationStep, *, progress: bool
-    ) -> tuple[Engine, Timer]:
-        """Build the Ignite engine and attach run-level handlers."""
-        engine = Engine(step)
-        timer = Timer(average=False).attach(engine)
-
-        if progress:
-            from ignite.contrib.handlers import ProgressBar
-
-            ProgressBar(desc=f"{type(self._model).__name__} activations").attach(engine)
-
-        return engine, timer
-
-    def _create_writer(
-        self, path: Path | None, writer: ActivationWriter | None
-    ) -> ActivationWriter:
-        """Use the explicit writer or create one from the optional path."""
-        if writer is not None:
-            return writer
-        return MemoryActivationWriter() if path is None else H5ActivationWriter(path)
-
-    @overload
     def map(
         self,
         loader: Iterable[Mapping[str, Any]],
         layer_names: str | list[str],
-        path: None = None,
-        writer: None = None,
+        output_transform: Callable[[object, dict[str, Any]], dict[str, torch.Tensor]]
+        | None = None,
         device: torch.device | str | None = None,
         progress: bool = True,
-    ) -> MemoryActivationStore: ...
-
-    @overload
-    def map(
-        self,
-        loader: Iterable[Mapping[str, Any]],
-        layer_names: str | list[str],
-        path: Path,
-        writer: None = None,
-        device: torch.device | str | None = None,
-        progress: bool = True,
-    ) -> H5ActivationStore: ...
-
-    @overload
-    def map(
-        self,
-        loader: Iterable[Mapping[str, Any]],
-        layer_names: str | list[str],
-        path: Path | None = None,
-        *,
-        writer: ActivationWriter,
-        device: torch.device | str | None = None,
-        progress: bool = True,
-    ) -> ActivationStore: ...
-
-    def map(
-        self,
-        loader: Iterable[Mapping[str, Any]],
-        layer_names: str | list[str],
-        path: Path | None = None,
-        writer: ActivationWriter | None = None,
-        device: torch.device | str | None = None,
-        progress: bool = True,
-    ) -> ActivationStore:
-        """Run the model over pre-batched inputs and store its activations.
+    ) -> SampleActivations:
+        """Run the model over pre-batched inputs and collect its activations.
 
         Args:
             loader: A caller-configured batch iterable, usually a DataLoader,
-                yielding mappings with an ``"id"`` field and model input
-                fields. IDs must be a batch of strings. All other fields are
-                passed to the model as keyword arguments, so the model's
-                ``forward`` parameter names define their meaning. The loader
-                owns dataset access and collation.
+                yielding mappings of model keyword inputs. Every key is passed
+                to the model as a keyword argument, so the model's ``forward``
+                parameter names define their meaning. The loader owns dataset
+                access, batching, and collation.
             layer_names: Layer or layers to capture, named as in
                 :meth:`available_layers`.
-            path: Destination for an HDF5 cache. When omitted, activations are
-                kept in memory.
-            writer: Supply a writer directly, overriding ``path``.
+            output_transform: Derive named per-sample tensors from the
+                model's raw output and that same call's ``model_inputs``
+                (after any ``device`` move), e.g. a
+                :class:`~nnact.adapters.GenerativeLMAdapter`. Field names and
+                shapes are entirely up to the transform — nothing here is
+                specific to any task. Runs inside the same hooked forward
+                pass as the layer captures, so getting both costs one pass
+                over the data, not two. Omit to skip collecting output.
             device: Device to move tensor leaves to. Other batch values are
                 preserved. The model is not moved; do that yourself beforehand.
-            progress: Show Ignite's progress bar over the batches.
+            progress: Show a progress bar over the batches.
 
         Returns:
-            A store over the captured activations. The concrete type is
-            narrowed for type checkers: omitting ``path`` and ``writer`` gives a
-            :class:`~nnact.store.MemoryActivationStore`, so ``.activations`` is
-            available without a cast; passing ``path`` gives a
-            :class:`~nnact.store.H5ActivationStore`.
+            A :class:`~nnact.SampleActivations` holding one stacked tensor per
+            layer, of shape ``(n_samples, *act_shape)``, in loader order, plus
+            one stacked tensor per output field if ``output_transform`` was
+            given. All tensors are detached, moved to CPU, and cast to
+            ``float16``.
 
         Raises:
             ValueError: If a requested layer is not a module of the model. The
@@ -262,18 +170,55 @@ class ActivationMapper:
         names = _as_list(layer_names)
         self._check_layers(names)
 
-        writer = self._create_writer(path, writer)
-        step = ActivationStep(self._model, names, writer, device)
-        engine, timer = self._create_engine(step, progress=progress)
-        engine.run(loader, max_epochs=1)
-        metadata = RunMetadata(
-            model=type(self._model).__name__,
-            parameters=self.parameter_count(),
-            layers=names,
-            samples=writer.sample_count,
-            batch_size=getattr(loader, "batch_size", None) or 0,
-            device=_model_device(self._model, device),
-            seconds=timer.value(),
-            created=datetime.now(UTC).isoformat(timespec="seconds"),
+        hooked = HookedModel(self._model)
+        hooked.eval()
+
+        act_batches: list[dict[str, torch.Tensor]] = []
+        output_batches: list[dict[str, torch.Tensor]] = []
+        if progress:
+            from tqdm.auto import tqdm
+
+            loader = tqdm(loader, desc=f"{type(self._model).__name__} activations")
+
+        with torch.no_grad():
+            for batch in loader:
+                model_inputs = dict(batch)
+                if device is not None:
+                    model_inputs = cast(
+                        "dict[str, Any]", _move_tensors(model_inputs, device)
+                    )
+
+                with hooked.capture(names):
+                    output = hooked(**model_inputs)
+                    act_batches.append(
+                        {
+                            name: hooked.get_activation(name)
+                            .detach()
+                            .to(device="cpu", dtype=torch.float16)
+                            for name in names
+                        }
+                    )
+                    if output_transform is not None:
+                        transformed = output_transform(output, model_inputs)
+                        output_batches.append(
+                            {
+                                field: tensor.detach().to(
+                                    device="cpu", dtype=torch.float16
+                                )
+                                for field, tensor in transformed.items()
+                            }
+                        )
+
+        activations = {
+            name: torch.cat([batch[name] for batch in act_batches], dim=0)
+            for name in names
+        }
+        collected_output = (
+            {
+                field: torch.cat([batch[field] for batch in output_batches], dim=0)
+                for field in output_batches[0]
+            }
+            if output_batches
+            else {}
         )
-        return writer.close(metadata=metadata)
+        return SampleActivations(activations=activations, output=collected_output)

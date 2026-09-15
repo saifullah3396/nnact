@@ -8,5 +8,4 @@ anything.
 pytest_plugins = [
     "tests.fixtures.models",
     "tests.fixtures.data",
-    "tests.fixtures.backends",
 ]

@@ -1,12 +1,11 @@
 [project]
 name = "nnact"
 version = "0.1.0"
-description = "Model-agnostic activation extraction and HDF5 caching for PyTorch models"
+description = "Model-agnostic activation extraction for PyTorch models"
 requires-python = ">=3.13"
 dependencies = [
-    "h5py>=3.16.0",
-    "pytorch-ignite>=0.5.5",
     "torch>=2.14.0",
+    "tqdm>=4.70.1",
 ]
 
 [dependency-groups]
@@ -23,7 +22,6 @@ examples = [
     "nbconvert>=7.17.1",
     "nbformat>=5.11.1",
     "torchvision>=0.29.0",
-    "tqdm>=4.70.1",
     "transformers>=5.17.0",
 ]
 
