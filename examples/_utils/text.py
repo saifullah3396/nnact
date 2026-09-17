@@ -30,7 +30,6 @@ class WikiTextSamples(Dataset[dict[str, Any]]):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         return {
-            "id": f"wiki_{idx:04d}",
             "input_ids": self.encoded["input_ids"][idx],
             "attention_mask": self.encoded["attention_mask"][idx],
         }
