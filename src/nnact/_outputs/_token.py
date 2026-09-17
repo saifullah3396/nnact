@@ -6,7 +6,7 @@ from functools import cached_property
 import numpy as np
 
 from nnact._outputs._sequence import SequenceActivationOutput
-from nnact._outputs._utils import _assert_shape, _softmax
+from nnact._outputs._utils import _assert_leading_shape, _assert_shape, _softmax
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -35,10 +35,10 @@ class TokenActivationOutput:
             )
 
         for name, tensor in self.activations.items():
-            _assert_shape(
+            _assert_leading_shape(
                 f"activation '{name}'",
                 tensor,
-                (num_tokens, None),
+                (num_tokens,),
             )
 
         # Offsets must contain integer indices.

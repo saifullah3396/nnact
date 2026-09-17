@@ -32,7 +32,7 @@ def main() -> None:
         output_type="token",
         tokenizer=tokenizer,
         cache_outputs=True,
-        run_dir=Path(__file__).parent / "runs" / "03_bert_wikitext_cache",
+        run_dir=Path("runs") / "03_bert_wikitext_cache",
     )
     loader = activation_loader(dataset, batch_size=16)
     activations = pipeline.run(loader)

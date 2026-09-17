@@ -32,7 +32,7 @@ def main() -> None:
         model,
         layers,
         output_type="token",
-        run_dir=Path(__file__).parent / "runs" / "02_gpt2_residual_stream",
+        run_dir=Path("runs") / "02_gpt2_residual_stream",
     )
     loader = activation_loader(dataset, batch_size=16)
     activations = pipeline.run(loader)

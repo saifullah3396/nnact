@@ -36,7 +36,7 @@ def main() -> None:
         output_type="token",
         tokenizer=tokenizer,
         cache_outputs=True,
-        run_dir=Path(__file__).parent / "runs" / "04_gpt2_residual_stream_cache",
+        run_dir=Path("runs") / "04_gpt2_residual_stream_cache",
     )
     loader = activation_loader(dataset, batch_size=16)
     activations = pipeline.run(loader)

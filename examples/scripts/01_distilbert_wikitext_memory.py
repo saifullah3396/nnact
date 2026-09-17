@@ -30,7 +30,7 @@ def main() -> None:
         ["bert.encoder.layer.5"],
         output_type="token",
         tokenizer=tokenizer,
-        run_dir=Path(__file__).parent / "runs" / "01_distilbert_wikitext_memory",
+        run_dir=Path("runs") / "01_distilbert_wikitext_memory",
     )
     loader = activation_loader(dataset, batch_size=16)
     activations = pipeline.run(loader)

@@ -5,7 +5,7 @@ from functools import cached_property
 
 import numpy as np
 
-from nnact._outputs._utils import _assert_shape, _softmax
+from nnact._outputs._utils import _assert_leading_shape, _assert_shape, _softmax
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -24,10 +24,10 @@ class SequenceActivationOutput:
         _assert_shape("labels", self.labels, (batch_size,))
 
         for name, tensor in self.activations.items():
-            _assert_shape(
+            _assert_leading_shape(
                 f"activation '{name}'",
                 tensor,
-                (batch_size, sequence_length, None),
+                (batch_size, sequence_length),
             )
 
     @cached_property
