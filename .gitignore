@@ -10,3 +10,5 @@ wheels/
 .venv
 .claude
 **/**activations.h5
+examples/text/runs/
+examples/scripts/runs/

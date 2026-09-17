@@ -7,10 +7,13 @@ from ignite.engine import Engine
 from ignite.handlers import Timer
 from transformers import PreTrainedTokenizerBase
 
+from nnact._logging import TqdmToLogger, get_logger
 from nnact._model._hooked import HookedModel
 from nnact._steps._accumulator import ActivationAccumulator
 from nnact._steps._sequence import SequenceActivationStep
 from nnact._steps._token import TokenActivationStep
+
+logger = get_logger(__name__)
 
 
 @final
@@ -24,6 +27,7 @@ class ActivationStepRunner:
         tokenizer: PreTrainedTokenizerBase | None = None,
         handlers: Iterable[ActivationAccumulator] = (),
         show_progress: bool = True,
+        log_progress_to_file: bool = False,
     ) -> None:
         self._step = self._build_step(
             output_type=output_type,
@@ -33,7 +37,9 @@ class ActivationStepRunner:
             tokenizer=tokenizer,
         )
         self._engine, self._timer = self._create_engine(
-            handlers=handlers, show_progress=show_progress
+            handlers=handlers,
+            show_progress=show_progress,
+            log_progress_to_file=log_progress_to_file,
         )
 
     def _build_step(
@@ -61,7 +67,11 @@ class ActivationStepRunner:
         )
 
     def _create_engine(
-        self, *, handlers: Iterable[ActivationAccumulator], show_progress: bool
+        self,
+        *,
+        handlers: Iterable[ActivationAccumulator],
+        show_progress: bool,
+        log_progress_to_file: bool,
     ) -> tuple[Engine, Timer]:
         """Build the Ignite engine and attach run-level handlers."""
         engine = Engine(self._step)
@@ -73,7 +83,10 @@ class ActivationStepRunner:
         if show_progress:
             from ignite.contrib.handlers import ProgressBar
 
-            ProgressBar(desc="activations").attach(engine)
+            tqdm_kwargs = {}
+            if log_progress_to_file:
+                tqdm_kwargs["file"] = TqdmToLogger(logger)
+            ProgressBar(desc="activations", **tqdm_kwargs).attach(engine)
 
         return engine, timer
 
