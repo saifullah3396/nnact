@@ -118,18 +118,6 @@ class InMemorySequenceActivationDataset(ActivationDataset):
     def __len__(self) -> int:
         return sum(logits.shape[0] for logits in self._logits)
 
-    def __getitem__(self, idx: int) -> SequenceActivationOutput:
-        activations = self.activations
-        loss, labels = self.loss, self.labels
-        return SequenceActivationOutput(
-            logits=self.logits[idx][np.newaxis],
-            loss=None if loss is None else loss[idx][np.newaxis],
-            labels=None if labels is None else labels[idx][np.newaxis],
-            activations={
-                name: tensor[idx][np.newaxis] for name, tensor in activations.items()
-            },
-        )
-
 
 @final
 class InMemoryTokenActivationDataset(ActivationDataset):
@@ -209,22 +197,6 @@ class InMemoryTokenActivationDataset(ActivationDataset):
     def __len__(self) -> int:
         return max(self.offsets.size - 1, 0)
 
-    def __getitem__(self, idx: int) -> TokenActivationOutput:
-        offsets = self.offsets
-        start, end = int(offsets[idx]), int(offsets[idx + 1])
-        activations = self.activations
-        loss, labels = self.loss, self.labels
-        token_ids, tokens = self.token_ids, self.tokens
-        return TokenActivationOutput(
-            logits=self.logits[start:end],
-            offsets=np.array([0, end - start], dtype=np.int64),
-            loss=None if loss is None else loss[start:end],
-            labels=None if labels is None else labels[start:end],
-            activations={name: tensor[start:end] for name, tensor in activations.items()},
-            token_ids=None if token_ids is None else token_ids[start:end],
-            tokens=None if tokens is None else tokens[start:end],
-        )
-
     @override
     def summary(self) -> pd.DataFrame:
         """Tabulate every real token held, one row per token.
@@ -261,4 +233,6 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         for name, tensor in self.activations.items():
             columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()
 
-        return pd.DataFrame(columns, index=pd.RangeIndex(int(offsets[-1]), name="token"))
+        return pd.DataFrame(
+            columns, index=pd.RangeIndex(int(offsets[-1]), name="token")
+        )
