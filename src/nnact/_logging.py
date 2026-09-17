@@ -5,6 +5,14 @@ from pathlib import Path
 
 LOG_FORMAT = "[%(asctime)s][%(name)s][%(levelname)s] %(message)s"
 
+_root = logging.getLogger("nnact")
+_root.setLevel(logging.INFO)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(logging.INFO)
+_console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+_root.addHandler(_console_handler)
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a module logger under the ``nnact`` hierarchy.
@@ -13,6 +21,10 @@ def get_logger(name: str) -> logging.Logger:
     ``nnact`` package already starts with ``nnact.`` (or is exactly
     ``nnact``); it's only prefixed when it doesn't already live under that
     hierarchy, so callers can pass ``__name__`` directly either way.
+
+    The ``nnact`` root logger always has a console handler attached (set up
+    on import of this module), so logging is visible by default without
+    calling :func:`enable_file_logging` first.
     """
     if name != "nnact" and not name.startswith("nnact."):
         name = f"nnact.{name}"
