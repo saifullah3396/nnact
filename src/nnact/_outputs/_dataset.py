@@ -44,8 +44,9 @@ class ActivationDataset(Dataset, ABC):
         """Tabulate the accumulated layers as a :class:`pandas.DataFrame`.
 
         Returns:
-            One row per layer, indexed by layer name, with columns ``shape``
-            (per sample) and ``bytes`` (for every sample held, as float32).
+            One row per layer, indexed by layer name, with columns ``samples``
+            (the number held, same for every row), ``shape`` (per sample), and
+            ``bytes`` (for every sample held, as float32).
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
@@ -58,11 +59,13 @@ class ActivationDataset(Dataset, ABC):
         names = self.layer_names
         shapes = [self.layer_shape(name) for name in names]
         elements = [int(np.prod(shape, dtype=np.int64)) for shape in shapes]
+        num_samples = len(self)
 
         return pd.DataFrame(
             {
+                "samples": [num_samples] * len(names),
                 "shape": shapes,
-                "bytes": [count * len(self) * 4 for count in elements],
+                "bytes": [count * num_samples * 4 for count in elements],
             },
             index=pd.Index(names, name="layer"),
         )
