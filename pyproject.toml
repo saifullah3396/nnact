@@ -6,15 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "h5py>=3.16.0",
     "pytorch-ignite>=0.5.5",
-    "torch>=2.14.0",
-]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-    "ruff>=0.16.7",
-]
-examples = [
+    "torch>=2.7.0",
     "datasets>=5.0.1",
     "ipykernel>=7.3.0",
     "jupyter>=1.1.1",
@@ -22,15 +14,15 @@ examples = [
     "nbclient>=0.11.0",
     "nbconvert>=7.17.1",
     "nbformat>=5.11.1",
-    "torchvision>=0.29.0",
+    "torchvision",
     "tqdm>=4.70.1",
-    "transformers>=5.17.0",
-]
-probing = [
-    "cuml-cu12>=25.2.0",
-    "cupy-cuda12x>=13.3.0",
+    "transformers",
     "scikit-learn>=1.5",
+    "cuml-cu12>=26.8.0",
 ]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.16.7"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,6 +33,21 @@ pythonVersion = "3.13"
 typeCheckingMode = "standard"
 ignoreMissingTypeStubs = true
 
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com/"
+
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com/simple"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
