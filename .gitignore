@@ -11,6 +11,6 @@ wheels/
 .claude
 **/**activations.h5
 runs/
-01_train_role_probes.py
-fake_dataset.jsonl
-probe_trianer.py
+/01_train_role_probes.py
+/fake_dataset.jsonl
+/probe_trianer.py
