@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 import torch
-from nnact._generator._utils import _assert_shape
+from nnact._outputs._utils import _assert_shape
 from torch.nn import functional as F
 
 

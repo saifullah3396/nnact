@@ -5,9 +5,9 @@ from typing import Any
 
 import torch
 from ignite.engine import Engine
-from nnact._generator._outputs._protocols import ModelOutput
-from nnact._generator._outputs._sequence import SequenceActivationOutput
-from nnact._generator._utils import _move_tensors
+from nnact._outputs._protocols import ModelOutput
+from nnact._outputs._sequence import SequenceActivationOutput
+from nnact._steps._utils import _move_tensors
 
 from nnact._model._hooked import HookedModel
 

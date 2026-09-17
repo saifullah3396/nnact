@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from nnact._generator._steps._sequence import SequenceActivationStep
-from nnact._generator._steps._token import TokenActivationStep
+from nnact._steps._sequence import SequenceActivationStep
+from nnact._steps._token import TokenActivationStep
 from torch import nn
 from transformers import PreTrainedModel
 
