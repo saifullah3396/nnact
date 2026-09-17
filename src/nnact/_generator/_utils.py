@@ -5,9 +5,18 @@ import torch
 from torch import nn
 
 
-def _as_list(layer_names: str | list[str]) -> list[str]:
-    """Accept a single layer name or a list of them."""
-    return [layer_names] if isinstance(layer_names, str) else list(layer_names)
+def _assert_shape(
+    name: str,
+    tensor: torch.Tensor | None,
+    shape: tuple[int | None, ...],
+) -> None:
+    if tensor is None:
+        return
+
+    assert tensor.ndim == len(shape) and all(
+        expected is None or actual == expected
+        for actual, expected in zip(tensor.shape, shape)
+    ), f"{name} must have shape {shape}, got {tuple(tensor.shape)}"
 
 
 def _describe_device(device: torch.device) -> str:
@@ -28,7 +37,7 @@ def _model_device(model: nn.Module, override: torch.device | str | None) -> str:
         return _describe_device(torch.device(override)) if override else "cpu"
 
 
-def _move_tensors(value: object, device: torch.device | str) -> object:
+def _move_tensors(value: Any, device: torch.device | str) -> Any:
     """Move tensor leaves while preserving the caller's batch structure."""
     if isinstance(value, torch.Tensor):
         return value.to(device)

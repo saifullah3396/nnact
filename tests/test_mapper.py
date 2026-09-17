@@ -11,8 +11,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from nnact._mapper import ActivationMapper
-from nnact._model import HookedModel
+from nnact._generator._generator import ActivationGenerator
+from nnact._model._hooked import HookedModel
 from nnact._types import RunMetadata
 from nnact.store import (
     H5ActivationStore,
@@ -52,7 +52,7 @@ def test_matches_manual_forward(
     right, not merely that they have plausible shapes.
     """
     dataset = tiny_dataset(n=7)
-    store = ActivationMapper(tiny_model).map(loader(dataset, 3), ["fc1", "fc2"])
+    store = ActivationGenerator(tiny_model).map(loader(dataset, 3), ["fc1", "fc2"])
 
     stacked = torch.stack([dataset[i].data for i in range(len(dataset))])
     tiny_model.eval()
@@ -119,7 +119,7 @@ def test_defaults_to_memory(
     tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
 ) -> None:
     """With no path, activations stay in memory and no file is written."""
-    store = ActivationMapper(tiny_model).map(loader(tiny_dataset(n=5)), "fc1")
+    store = ActivationGenerator(tiny_model).map(loader(tiny_dataset(n=5)), "fc1")
 
     assert isinstance(store, MemoryActivationStore)
     assert len(store) == 5
@@ -135,7 +135,7 @@ def test_path_selects_h5_and_explicit_writer_wins(
 ) -> None:
     """A path selects the HDF5 backend; an explicit writer overrides it."""
     dataset = tiny_dataset(n=4)
-    mapper = ActivationMapper(tiny_model)
+    mapper = ActivationGenerator(tiny_model)
 
     store = mapper.map(loader(dataset), "fc1", h5_path)
     assert isinstance(store, H5ActivationStore)
@@ -171,7 +171,7 @@ def test_model_in_eval_and_no_grad(
     model = TrainModeProbe()
     model.train()
 
-    store = ActivationMapper(model).map(loader(tiny_dataset(n=4)), "drop")
+    store = ActivationGenerator(model).map(loader(tiny_dataset(n=4)), "drop")
 
     activations = store.activations["drop"]
     assert activations.abs().sum() > 0, "activations are zero, model ran in train mode"
@@ -183,7 +183,7 @@ def test_map_rejects_unknown_layer(
     tiny_model: TinyMLP, tiny_dataset: DatasetFactory
 ) -> None:
     """A bad layer name fails before any forward pass, naming near misses."""
-    mapper = ActivationMapper(tiny_model)
+    mapper = ActivationGenerator(tiny_model)
 
     with pytest.raises(ValueError, match="not found in TinyMLP") as excinfo:
         mapper.map(loader(tiny_dataset(n=4)), ["fc1", "fc3"])
@@ -195,7 +195,7 @@ def test_map_rejects_unknown_layer(
 
 def test_summary_lists_and_marks_layers(tiny_model: TinyMLP) -> None:
     """summary() reports hookable layers and flags ones absent from the model."""
-    mapper = ActivationMapper(tiny_model)
+    mapper = ActivationGenerator(tiny_model)
 
     assert mapper.available_layers() == ["fc1", "fc2"]
     assert mapper.parameter_count() == sum(p.numel() for p in tiny_model.parameters())
@@ -215,7 +215,7 @@ def test_map_records_run_metadata(
     tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
 ) -> None:
     """Metadata describing the run is stored with the activations."""
-    store = ActivationMapper(tiny_model).map(
+    store = ActivationGenerator(tiny_model).map(
         loader(tiny_dataset(n=6)), ["fc1", "fc2"], progress=False
     )
 
@@ -234,7 +234,7 @@ def test_h5_metadata_survives_roundtrip(
     tiny_model: TinyMLP, tiny_dataset: DatasetFactory, h5_path: Path
 ) -> None:
     """HDF5 persists the metadata, so a reloaded cache says how it was made."""
-    written = ActivationMapper(tiny_model).map(
+    written = ActivationGenerator(tiny_model).map(
         loader(tiny_dataset(n=4)), "fc1", h5_path, progress=False
     )
     expected = written.metadata
@@ -281,7 +281,7 @@ def test_metadata_reports_actual_device(
     A model already on an accelerator runs there whether or not ``device`` was
     given, so trusting the argument would misreport the run.
     """
-    store = ActivationMapper(tiny_model).map(
+    store = ActivationGenerator(tiny_model).map(
         loader(tiny_dataset(n=4)), "fc1", progress=False
     )
 
@@ -309,7 +309,9 @@ def test_loader_batch_structure_and_non_tensor_values_are_preserved() -> None:
             "label": ["left", "right"],
         }
     ]
-    store = ActivationMapper(model).map(batches, "layer", device="cpu", progress=False)
+    store = ActivationGenerator(model).map(
+        batches, "layer", device="cpu", progress=False
+    )
 
     assert store.sample_ids == ["a", "b"]
     assert torch.equal(store.activations["layer"], torch.tensor([[4.0], [6.0]]))

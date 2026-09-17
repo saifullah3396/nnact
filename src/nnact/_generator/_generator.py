@@ -1,66 +1,19 @@
+from __future__ import annotations
+
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, final, overload
+from typing import Any, final, overload
 
+import pandas as pd
 import torch
 from ignite.engine import Engine
 from ignite.handlers import Timer
 from torch import nn
 
-from nnact._model import HookedModel
-from nnact._types import RunMetadata
-from nnact._utils import _as_list, _model_device, _move_tensors, _split_batch
-from nnact.store import (
-    ActivationStore,
-    ActivationWriter,
-    H5ActivationStore,
-    H5ActivationWriter,
-    MemoryActivationStore,
-    MemoryActivationWriter,
-)
-
-if TYPE_CHECKING:
-    import pandas as pd
-
-
-class ActivationStep:
-    """Capture and write activations for one caller-provided batch."""
-
-    def __init__(
-        self,
-        model: nn.Module,
-        layer_names: list[str],
-        writer: ActivationWriter,
-        device: torch.device | str | None,
-    ) -> None:
-        self._model = HookedModel(model)
-        self._model.eval()
-        self._layer_names = layer_names
-        self._writer = writer
-        self._device = device
-
-    @torch.no_grad()
-    def __call__(self, _engine: Engine, batch: Mapping[str, Any]) -> int:
-        if not isinstance(batch, Mapping):
-            raise TypeError("Each loader batch must be a mapping.")
-
-        ids, model_inputs = _split_batch(batch)
-        if self._device is not None:
-            model_inputs = _move_tensors(model_inputs, self._device)
-
-        with self._model.capture(self._layer_names):
-            self._model(**model_inputs)
-            activations = {
-                name: self._model.get_activation(name) for name in self._layer_names
-            }
-            self._writer.write(ids, activations)
-
-        return len(ids)
-
 
 @final
-class ActivationMapper:
+class ActivationGenerator:
     def __init__(self, model: nn.Module) -> None:
         self._model = model
 
@@ -86,7 +39,7 @@ class ActivationMapper:
 
     def summary(
         self, layer_names: str | list[str] | None = None, depth: int = 3
-    ) -> "pd.DataFrame":
+    ) -> pd.DataFrame:
         """Tabulate the hookable layers as a :class:`pandas.DataFrame`.
 
         Useful before extracting: it shows which names are hookable, what kind
@@ -124,7 +77,9 @@ class ActivationMapper:
         )
 
         if layer_names is not None:
-            selected = set(_as_list(layer_names))
+            selected = set(
+                [layer_names] if isinstance(layer_names, str) else list(layer_names)
+            )
             frame["selected"] = [name in selected for name in names]
         return frame
 
@@ -165,11 +120,12 @@ class ActivationMapper:
         raise ValueError("\n".join(lines))
 
     def _create_engine(
-        self, step: ActivationStep, *, progress: bool
+        self, step: ActivationStep, writer: ActivationWriter, *, progress: bool
     ) -> tuple[Engine, Timer]:
         """Build the Ignite engine and attach run-level handlers."""
         engine = Engine(step)
         timer = Timer(average=False).attach(engine)
+        _attach_writer(engine, writer)
 
         if progress:
             from ignite.contrib.handlers import ProgressBar
@@ -263,8 +219,8 @@ class ActivationMapper:
         self._check_layers(names)
 
         writer = self._create_writer(path, writer)
-        step = ActivationStep(self._model, names, writer, device)
-        engine, timer = self._create_engine(step, progress=progress)
+        step = ActivationStep(self._model, names, device)
+        engine, timer = self._create_engine(step, writer, progress=progress)
         engine.run(loader, max_epochs=1)
         metadata = RunMetadata(
             model=type(self._model).__name__,

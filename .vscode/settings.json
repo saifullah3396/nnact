@@ -10,5 +10,40 @@
         "**/.claude": true,
         "**/.pytest_cache": true,
         "**/.ruff_cache": true,
-    }
+    },
+    "python.analysis.indexing": true,
+    "python.analysis.autoImportCompletions": true,
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit",
+            "source.fixAll": "explicit"
+        },
+        "editor.trimAutoWhitespace": true,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "files.trimTrailingWhitespace": true,
+        "editor.rulers": [
+            120
+        ],
+    },
+    "github.copilot.editor.enableCodeActions": false,
+    "workbench.colorCustomizations": {
+        // will change the color of three dots to red
+        "editorHint.foreground": "#ff0000",
+        // will underline the entire word with dots in your chosen color
+        "editorHint.border": "#00ff66"
+    },
+    "notebook.output.textLineLimit": 200,
+    "notebook.output.scrolling": false,
+    "github.copilot.chat.reviewSelection.instructions": [
+        {
+            "file": ".copilot-docstring-instructions.md",
+        }
+    ],
+    "python.analysis.showOnlyDirectDependenciesInAutoImport": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.terminal.activateEnvironment": false,
 }
