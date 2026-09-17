@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import numpy as np
 import torch
 from ignite.engine import Engine
 from transformers import PreTrainedTokenizerBase
@@ -41,9 +42,14 @@ class TokenActivationStep:
         if self._device is not None:
             batch = _move_tensors(batch, self._device)
 
+        assert "input_ids" in batch, "batch must contain an input_ids"
         assert "attention_mask" in batch, "batch must contain an attention_mask"
-        mask = batch["attention_mask"]
-        assert isinstance(mask, torch.Tensor), "attention_mask must be a torch.Tensor"
+        token_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        assert isinstance(token_ids, torch.Tensor), "token_ids must be a torch.Tensor"
+        assert isinstance(attention_mask, torch.Tensor), (
+            "attention_mask must be a torch.Tensor"
+        )
 
         with self._hooked_model.capture(self._layer_names):
             raw_output: ModelOutput = self._hooked_model(**batch)
@@ -54,19 +60,27 @@ class TokenActivationStep:
             }
 
         sequence_output = SequenceActivationOutput(
-            logits=raw_output.logits,
-            loss=raw_output.loss,
+            logits=raw_output.logits.half().detach().cpu().numpy(),
+            loss=(
+                raw_output.loss.half().detach().cpu().numpy()
+                if raw_output.loss is not None
+                else None
+            ),
             activations=activations,
         )
 
         tokens = None
         if self._tokenizer is not None:
-            token_ids = batch["token_ids"]
-            tokens = self._tokenizer.convert_ids_to_tokens(
-                token_ids[mask.bool()].tolist()
-            )
+            tokens = [
+                self._tokenizer.convert_ids_to_tokens(ids) for ids in token_ids.tolist()
+            ]
             assert isinstance(tokens, list), f"List[str] expected, got {type(tokens)}"
 
+        labels = batch.get("labels")
         return TokenActivationOutput.from_sequence(
-            sequence_output, mask=mask, labels=batch.get("labels"), token_ids=token_ids
+            sequence_output,
+            mask=attention_mask.detach().cpu().numpy(),
+            labels=labels.detach().cpu().numpy() if labels is not None else None,
+            token_ids=token_ids.detach().cpu().numpy(),
+            tokens=np.asarray(tokens),
         )

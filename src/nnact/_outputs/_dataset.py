@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, final, override
 
-import torch
+import numpy as np
 from torch.utils.data import Dataset
 
 from nnact._outputs._sequence import SequenceActivationOutput
@@ -29,7 +29,7 @@ class ActivationDataset(Dataset, ABC):
 
     @property
     @abstractmethod
-    def activations(self) -> dict[str, torch.Tensor]:
+    def activations(self) -> dict[str, np.ndarray]:
         """Every layer's accumulated activations, stacked across samples."""
 
     @abstractmethod
@@ -53,7 +53,6 @@ class ActivationDataset(Dataset, ABC):
                 ``nnact``; use :attr:`layer_names` and :attr:`activations`
                 instead.
         """
-        import numpy as np
         import pandas as pd
 
         names = self.layer_names
@@ -76,10 +75,10 @@ class InMemorySequenceActivationDataset(ActivationDataset):
     """Activations accumulated in memory from :class:`SequenceActivationOutput` batches."""
 
     def __init__(self) -> None:
-        self._logits: list[torch.Tensor] = []
-        self._losses: list[torch.Tensor] = []
-        self._labels: list[torch.Tensor] = []
-        self._activations: dict[str, list[torch.Tensor]] = {}
+        self._logits: list[np.ndarray] = []
+        self._losses: list[np.ndarray] = []
+        self._labels: list[np.ndarray] = []
+        self._activations: dict[str, list[np.ndarray]] = {}
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
         self._logits.append(output.logits)
@@ -96,22 +95,23 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         return list(self._activations)
 
     @property
-    def logits(self) -> torch.Tensor:
-        return torch.cat(self._logits, dim=0)
+    def logits(self) -> np.ndarray:
+        return np.concatenate(self._logits, axis=0)
 
     @property
-    def loss(self) -> torch.Tensor | None:
-        return torch.cat(self._losses, dim=0) if self._losses else None
+    def loss(self) -> np.ndarray | None:
+        return np.concatenate(self._losses, axis=0) if self._losses else None
 
     @property
-    def labels(self) -> torch.Tensor | None:
-        return torch.cat(self._labels, dim=0) if self._labels else None
+    def labels(self) -> np.ndarray | None:
+        return np.concatenate(self._labels, axis=0) if self._labels else None
 
     @property
     @override
-    def activations(self) -> dict[str, torch.Tensor]:
+    def activations(self) -> dict[str, np.ndarray]:
         return {
-            name: torch.cat(tensors, dim=0) for name, tensors in self._activations.items()
+            name: np.concatenate(tensors, axis=0)
+            for name, tensors in self._activations.items()
         }
 
     @override
@@ -122,11 +122,11 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         activations = self.activations
         loss, labels = self.loss, self.labels
         return SequenceActivationOutput(
-            logits=self.logits[idx].unsqueeze(0),
-            loss=None if loss is None else loss[idx].unsqueeze(0),
-            labels=None if labels is None else labels[idx].unsqueeze(0),
+            logits=self.logits[idx][np.newaxis],
+            loss=None if loss is None else loss[idx][np.newaxis],
+            labels=None if labels is None else labels[idx][np.newaxis],
             activations={
-                name: tensor[idx].unsqueeze(0) for name, tensor in activations.items()
+                name: tensor[idx][np.newaxis] for name, tensor in activations.items()
             },
         )
 
@@ -136,13 +136,13 @@ class InMemoryTokenActivationDataset(ActivationDataset):
     """Activations accumulated in memory from :class:`TokenActivationOutput` batches."""
 
     def __init__(self) -> None:
-        self._offsets: list[torch.Tensor] = [torch.zeros(1, dtype=torch.long)]
-        self._logits: list[torch.Tensor] = []
-        self._losses: list[torch.Tensor] = []
-        self._labels: list[torch.Tensor] = []
-        self._activations: dict[str, list[torch.Tensor]] = {}
-        self._token_ids: list[torch.Tensor] = []
-        self._tokens: list[str] = []
+        self._offsets: list[np.ndarray] = [np.zeros(1, dtype=np.int64)]
+        self._logits: list[np.ndarray] = []
+        self._losses: list[np.ndarray] = []
+        self._labels: list[np.ndarray] = []
+        self._activations: dict[str, list[np.ndarray]] = {}
+        self._token_ids: list[np.ndarray] = []
+        self._tokens: list[np.ndarray] = []
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
         base = self._offsets[-1][-1]
@@ -157,7 +157,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         if output.token_ids is not None:
             self._token_ids.append(output.token_ids)
         if output.tokens is not None:
-            self._tokens.extend(output.tokens)
+            self._tokens.append(output.tokens)
 
     @property
     @override
@@ -165,48 +165,49 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         return list(self._activations)
 
     @property
-    def offsets(self) -> torch.Tensor:
-        return torch.cat(self._offsets, dim=0)
+    def offsets(self) -> np.ndarray:
+        return np.concatenate(self._offsets, axis=0)
 
     @property
-    def logits(self) -> torch.Tensor:
-        return torch.cat(self._logits, dim=0)
+    def logits(self) -> np.ndarray:
+        return np.concatenate(self._logits, axis=0)
 
     @property
-    def loss(self) -> torch.Tensor | None:
-        return torch.cat(self._losses, dim=0) if self._losses else None
+    def loss(self) -> np.ndarray | None:
+        return np.concatenate(self._losses, axis=0) if self._losses else None
 
     @property
-    def labels(self) -> torch.Tensor | None:
-        return torch.cat(self._labels, dim=0) if self._labels else None
+    def labels(self) -> np.ndarray | None:
+        return np.concatenate(self._labels, axis=0) if self._labels else None
 
     @property
     @override
-    def activations(self) -> dict[str, torch.Tensor]:
+    def activations(self) -> dict[str, np.ndarray]:
         return {
-            name: torch.cat(tensors, dim=0) for name, tensors in self._activations.items()
+            name: np.concatenate(tensors, axis=0)
+            for name, tensors in self._activations.items()
         }
 
     @property
-    def token_ids(self) -> torch.Tensor | None:
-        return torch.cat(self._token_ids, dim=0) if self._token_ids else None
+    def token_ids(self) -> np.ndarray | None:
+        return np.concatenate(self._token_ids, axis=0) if self._token_ids else None
 
     @property
-    def tokens(self) -> list[str] | None:
-        return list(self._tokens) if self._tokens else None
+    def tokens(self) -> np.ndarray | None:
+        return np.concatenate(self._tokens, axis=0) if self._tokens else None
 
     @property
-    def prediction(self) -> torch.Tensor:
-        return self.logits.argmax(dim=-1)
+    def prediction(self) -> np.ndarray:
+        return self.logits.argmax(axis=-1)
 
     @property
-    def sequence_lengths(self) -> torch.Tensor:
+    def sequence_lengths(self) -> np.ndarray:
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
 
     @override
     def __len__(self) -> int:
-        return max(self.offsets.numel() - 1, 0)
+        return max(self.offsets.size - 1, 0)
 
     def __getitem__(self, idx: int) -> TokenActivationOutput:
         offsets = self.offsets
@@ -216,7 +217,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         token_ids, tokens = self.token_ids, self.tokens
         return TokenActivationOutput(
             logits=self.logits[start:end],
-            offsets=torch.tensor([0, end - start], dtype=torch.long),
+            offsets=np.array([0, end - start], dtype=np.int64),
             loss=None if loss is None else loss[start:end],
             labels=None if labels is None else labels[start:end],
             activations={name: tensor[start:end] for name, tensor in activations.items()},
@@ -244,9 +245,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         import pandas as pd
 
         offsets = self.offsets
-        sample_of_token = torch.repeat_interleave(
-            torch.arange(len(self)), self.sequence_lengths
-        )
+        sample_of_token = np.repeat(np.arange(len(self)), self.sequence_lengths)
 
         columns: dict[str, object] = {"sample": sample_of_token.tolist()}
 
@@ -255,11 +254,11 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             columns["token_id"] = token_ids.tolist()
         tokens = self.tokens
         if tokens is not None:
-            columns["token"] = tokens
+            columns["token"] = tokens.tolist()
 
         columns["predicted_id"] = self.prediction.tolist()
 
         for name, tensor in self.activations.items():
-            columns[f"{name}_norm"] = tensor.norm(dim=-1).tolist()
+            columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()
 
-        return pd.DataFrame(columns, index=pd.RangeIndex(offsets[-1].item(), name="token"))
+        return pd.DataFrame(columns, index=pd.RangeIndex(int(offsets[-1]), name="token"))

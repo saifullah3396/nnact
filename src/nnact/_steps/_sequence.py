@@ -5,11 +5,11 @@ from typing import Any
 
 import torch
 from ignite.engine import Engine
+
+from nnact._model._hooked import HookedModel
 from nnact._outputs._protocols import ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._steps._utils import _move_tensors
-
-from nnact._model._hooked import HookedModel
 
 
 class SequenceActivationStep:
@@ -45,9 +45,14 @@ class SequenceActivationStep:
                 for name in self._layer_names
             }
 
+        labels = batch.get("labels")
         return SequenceActivationOutput(
-            logits=raw_output.logits,
-            loss=raw_output.loss,
-            labels=batch.get("labels"),
+            logits=raw_output.logits.half().detach().cpu().numpy(),
+            loss=(
+                raw_output.loss.half().detach().cpu().numpy()
+                if raw_output.loss is not None
+                else None
+            ),
+            labels=labels.detach().cpu().numpy() if labels is not None else None,
             activations=activations,
         )

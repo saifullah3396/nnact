@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
@@ -18,12 +19,12 @@ class HookedModel(nn.Module):
     def __init__(self, model: nn.Module) -> None:
         super().__init__()
         self._model = model
-        self._activations: dict[str, torch.Tensor] = {}
+        self._activations: dict[str, np.ndarray] = {}
 
     def forward(self, *args: object, **kwargs: object) -> object:
         return self._model(*args, **kwargs)
 
-    def get_activation(self, layer_name: str) -> torch.Tensor:
+    def get_activation(self, layer_name: str) -> np.ndarray:
         try:
             return self._activations[layer_name]
         except KeyError:
@@ -168,7 +169,9 @@ class HookedModel(nn.Module):
                                 f"is not a Tensor, got {type(output)}"
                             )
 
-                        self._activations[layer_key] = tensor
+                        self._activations[layer_key] = (
+                            tensor.half().detach().cpu().numpy()
+                        )
 
                     return hook
 
