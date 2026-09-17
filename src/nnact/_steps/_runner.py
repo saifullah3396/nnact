@@ -5,6 +5,7 @@ from typing import Any, Literal, final
 
 from ignite.engine import Engine
 from ignite.handlers import Timer
+from transformers import PreTrainedTokenizerBase
 
 from nnact._model._hooked import HookedModel
 from nnact._steps._accumulator import ActivationAccumulator
@@ -20,6 +21,7 @@ class ActivationStepRunner:
         hooked_model: HookedModel,
         layer_names: list[str],
         device: Any | None = None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
         handlers: Iterable[ActivationAccumulator] = (),
         show_progress: bool = True,
     ) -> None:
@@ -28,6 +30,7 @@ class ActivationStepRunner:
             hooked_model=hooked_model,
             layer_names=layer_names,
             device=device,
+            tokenizer=tokenizer,
         )
         self._engine, self._timer = self._create_engine(
             handlers=handlers, show_progress=show_progress
@@ -40,6 +43,7 @@ class ActivationStepRunner:
         hooked_model: HookedModel,
         layer_names: list[str],
         device: Any | None,
+        tokenizer: PreTrainedTokenizerBase | None,
     ) -> SequenceActivationStep | TokenActivationStep:
         assert output_type in ("sequence", "token"), (
             f"Unknown output_type '{output_type}', expected 'sequence' or 'token'."
@@ -50,7 +54,10 @@ class ActivationStepRunner:
                 hooked_model=hooked_model, layer_names=layer_names, device=device
             )
         return TokenActivationStep(
-            hooked_model=hooked_model, layer_names=layer_names, device=device
+            hooked_model=hooked_model,
+            layer_names=layer_names,
+            device=device,
+            tokenizer=tokenizer,
         )
 
     def _create_engine(

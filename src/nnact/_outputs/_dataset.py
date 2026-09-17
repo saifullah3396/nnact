@@ -141,6 +141,8 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         self._losses: list[torch.Tensor] = []
         self._labels: list[torch.Tensor] = []
         self._activations: dict[str, list[torch.Tensor]] = {}
+        self._token_ids: list[torch.Tensor] = []
+        self._tokens: list[str] = []
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
         base = self._offsets[-1][-1]
@@ -152,6 +154,10 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             self._labels.append(output.labels)
         for name, tensor in output.activations.items():
             self._activations.setdefault(name, []).append(tensor)
+        if output.token_ids is not None:
+            self._token_ids.append(output.token_ids)
+        if output.tokens is not None:
+            self._tokens.extend(output.tokens)
 
     @property
     @override
@@ -181,6 +187,23 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             name: torch.cat(tensors, dim=0) for name, tensors in self._activations.items()
         }
 
+    @property
+    def token_ids(self) -> torch.Tensor | None:
+        return torch.cat(self._token_ids, dim=0) if self._token_ids else None
+
+    @property
+    def tokens(self) -> list[str] | None:
+        return list(self._tokens) if self._tokens else None
+
+    @property
+    def prediction(self) -> torch.Tensor:
+        return self.logits.argmax(dim=-1)
+
+    @property
+    def sequence_lengths(self) -> torch.Tensor:
+        offsets = self.offsets
+        return offsets[1:] - offsets[:-1]
+
     @override
     def __len__(self) -> int:
         return max(self.offsets.numel() - 1, 0)
@@ -190,10 +213,53 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         start, end = int(offsets[idx]), int(offsets[idx + 1])
         activations = self.activations
         loss, labels = self.loss, self.labels
+        token_ids, tokens = self.token_ids, self.tokens
         return TokenActivationOutput(
             logits=self.logits[start:end],
             offsets=torch.tensor([0, end - start], dtype=torch.long),
             loss=None if loss is None else loss[start:end],
             labels=None if labels is None else labels[start:end],
             activations={name: tensor[start:end] for name, tensor in activations.items()},
+            token_ids=None if token_ids is None else token_ids[start:end],
+            tokens=None if tokens is None else tokens[start:end],
         )
+
+    @override
+    def summary(self) -> pd.DataFrame:
+        """Tabulate every real token held, one row per token.
+
+        Returns:
+            A :class:`pandas.DataFrame` indexed by flat token position, with
+            columns ``sample`` (which accumulated sample the token belongs
+            to), ``token_id`` and ``token`` (present only when a tokenizer was
+            given to the pipeline), ``predicted_id`` (the model's own argmax
+            prediction for that token), and one ``{layer}_norm`` column per
+            layer holding that token's activation L2 norm.
+
+        Raises:
+            ImportError: If pandas is not installed. It is not a dependency of
+                ``nnact``; use :attr:`token_ids`, :attr:`tokens`, and
+                :attr:`activations` instead.
+        """
+        import pandas as pd
+
+        offsets = self.offsets
+        sample_of_token = torch.repeat_interleave(
+            torch.arange(len(self)), self.sequence_lengths
+        )
+
+        columns: dict[str, object] = {"sample": sample_of_token.tolist()}
+
+        token_ids = self.token_ids
+        if token_ids is not None:
+            columns["token_id"] = token_ids.tolist()
+        tokens = self.tokens
+        if tokens is not None:
+            columns["token"] = tokens
+
+        columns["predicted_id"] = self.prediction.tolist()
+
+        for name, tensor in self.activations.items():
+            columns[f"{name}_norm"] = tensor.norm(dim=-1).tolist()
+
+        return pd.DataFrame(columns, index=pd.RangeIndex(offsets[-1].item(), name="token"))

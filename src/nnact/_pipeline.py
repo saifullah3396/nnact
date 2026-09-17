@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Literal, final
 
 from torch import nn
+from transformers import PreTrainedTokenizerBase
 
 from nnact._model._hooked import HookedModel
 from nnact._outputs._dataset import ActivationDataset
@@ -22,6 +23,7 @@ class ActivationPipeline:
         layer_names: str | list[str],
         output_type: Literal["sequence", "token"],
         device: Any | None = None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
         show_progress: bool = True,
     ) -> None:
         assert output_type in ("sequence", "token"), (
@@ -37,6 +39,7 @@ class ActivationPipeline:
             hooked_model=hooked_model,
             layer_names=names,
             device=device,
+            tokenizer=tokenizer,
             show_progress=show_progress,
         )
 
@@ -56,6 +59,7 @@ class ActivationPipeline:
         hooked_model: HookedModel,
         layer_names: list[str],
         device: Any | None,
+        tokenizer: PreTrainedTokenizerBase | None,
         show_progress: bool,
     ) -> ActivationStepRunner:
         return ActivationStepRunner(
@@ -63,6 +67,7 @@ class ActivationPipeline:
             hooked_model=hooked_model,
             layer_names=layer_names,
             device=device,
+            tokenizer=tokenizer,
             handlers=[self._accumulator],
             show_progress=show_progress,
         )

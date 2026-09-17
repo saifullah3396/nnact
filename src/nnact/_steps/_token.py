@@ -5,12 +5,13 @@ from typing import Any
 
 import torch
 from ignite.engine import Engine
+from transformers import PreTrainedTokenizerBase
+
+from nnact._model._hooked import HookedModel
 from nnact._outputs._protocols import ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
 from nnact._steps._utils import _move_tensors
-
-from nnact._model._hooked import HookedModel
 
 
 class TokenActivationStep:
@@ -19,10 +20,12 @@ class TokenActivationStep:
         hooked_model: HookedModel,
         layer_names: list[str],
         device: torch.device | str | None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
     ) -> None:
         self._hooked_model = hooked_model
         self._layer_names = layer_names
         self._device = device
+        self._tokenizer = tokenizer
         self._hooked_model.check_layers(self._layer_names)
 
     @torch.no_grad()
@@ -56,8 +59,14 @@ class TokenActivationStep:
             activations=activations,
         )
 
+        tokens = None
+        if self._tokenizer is not None:
+            token_ids = batch["token_ids"]
+            tokens = self._tokenizer.convert_ids_to_tokens(
+                token_ids[mask.bool()].tolist()
+            )
+            assert isinstance(tokens, list), f"List[str] expected, got {type(tokens)}"
+
         return TokenActivationOutput.from_sequence(
-            sequence_output,
-            mask=mask,
-            labels=batch.get("labels"),
+            sequence_output, mask=mask, labels=batch.get("labels"), token_ids=token_ids
         )

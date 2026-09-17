@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
+from itertools import compress
 
 import torch
+from torch.nn import functional as F
+
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._utils import _assert_shape
-from torch.nn import functional as F
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -16,6 +18,8 @@ class TokenActivationOutput:
     loss: torch.Tensor | None = None
     labels: torch.Tensor | None = None
     activations: dict[str, torch.Tensor] = field(default_factory=dict)
+    token_ids: torch.Tensor | None = None
+    tokens: list[str] | None = None
 
     def __post_init__(self):
         _assert_shape("logits", self.logits, (None, None))
@@ -25,6 +29,12 @@ class TokenActivationOutput:
         _assert_shape("loss", self.loss, (num_tokens,))
         _assert_shape("labels", self.labels, (num_tokens,))
         _assert_shape("offsets", self.offsets, (None,))
+        _assert_shape("token_ids", self.token_ids, (num_tokens,))
+
+        if self.tokens is not None:
+            assert len(self.tokens) == num_tokens, (
+                f"tokens must have {num_tokens} entries, got {len(self.tokens)}"
+            )
 
         # Offsets must contain integer indices.
         assert self.offsets.dtype == torch.long
@@ -54,6 +64,8 @@ class TokenActivationOutput:
         output: SequenceActivationOutput,
         mask: torch.Tensor,
         labels: torch.Tensor | None = None,
+        token_ids: torch.Tensor | None = None,
+        tokens: list[str] | None = None,
     ) -> TokenActivationOutput:
         _assert_shape(
             "mask",
@@ -63,6 +75,11 @@ class TokenActivationOutput:
         _assert_shape(
             "labels",
             labels,
+            (output.batch_size, output.sequence_length),
+        )
+        _assert_shape(
+            "token_ids",
+            token_ids,
             (output.batch_size, output.sequence_length),
         )
 
@@ -78,6 +95,8 @@ class TokenActivationOutput:
             activations={
                 name: tensor[mask] for name, tensor in output.activations.items()
             },
+            token_ids=token_ids[mask] if token_ids is not None else None,
+            tokens=list(compress(tokens, mask)) if tokens is not None else None,
         )
 
     @cached_property
