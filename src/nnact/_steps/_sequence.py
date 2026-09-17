@@ -47,9 +47,9 @@ class SequenceActivationStep:
 
         labels = batch.get("labels")
         return SequenceActivationOutput(
-            logits=raw_output.logits.half().detach().cpu().numpy(),
+            logits=raw_output.logits.detach().cpu().numpy(),
             loss=(
-                raw_output.loss.half().detach().cpu().numpy()
+                raw_output.loss.detach().cpu().numpy()
                 if raw_output.loss is not None
                 else None
             ),

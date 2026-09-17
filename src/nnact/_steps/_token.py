@@ -60,9 +60,9 @@ class TokenActivationStep:
             }
 
         sequence_output = SequenceActivationOutput(
-            logits=raw_output.logits.half().detach().cpu().numpy(),
+            logits=raw_output.logits.detach().cpu().numpy(),
             loss=(
-                raw_output.loss.half().detach().cpu().numpy()
+                raw_output.loss.detach().cpu().numpy()
                 if raw_output.loss is not None
                 else None
             ),
@@ -82,5 +82,5 @@ class TokenActivationStep:
             mask=attention_mask.detach().cpu().numpy(),
             labels=labels.detach().cpu().numpy() if labels is not None else None,
             token_ids=token_ids.detach().cpu().numpy(),
-            tokens=np.asarray(tokens),
+            tokens=np.asarray(tokens) if tokens is not None else None,
         )

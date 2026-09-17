@@ -169,9 +169,7 @@ class HookedModel(nn.Module):
                                 f"is not a Tensor, got {type(output)}"
                             )
 
-                        self._activations[layer_key] = (
-                            tensor.half().detach().cpu().numpy()
-                        )
+                        self._activations[layer_key] = tensor.detach().cpu().numpy()
 
                     return hook
 
