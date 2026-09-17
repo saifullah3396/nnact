@@ -5,33 +5,32 @@ from typing import Any
 
 import torch
 from ignite.engine import Engine
-from torch import nn
-
 from nnact._generator._outputs._protocols import ModelOutput
-from nnact._generator._outputs._sequence import SequenceOutput
-from nnact._generator._outputs._token import TokenOutput
+from nnact._generator._outputs._sequence import SequenceActivationOutput
+from nnact._generator._outputs._token import TokenActivationOutput
 from nnact._generator._utils import _move_tensors
+
 from nnact._model._hooked import HookedModel
 
 
 class TokenActivationStep:
     def __init__(
         self,
-        model: nn.Module,
+        hooked_model: HookedModel,
         layer_names: list[str],
         device: torch.device | str | None,
     ) -> None:
-        self._model = model
+        self._hooked_model = hooked_model
         self._layer_names = layer_names
         self._device = device
-        self._hooked_model = HookedModel(self._model)
+        self._hooked_model.check_layers(self._layer_names)
 
     @torch.no_grad()
     def __call__(
         self,
         engine: Engine,
         batch: Mapping[str, Any],
-    ) -> TokenOutput:
+    ) -> TokenActivationOutput:
         assert isinstance(batch, Mapping), (
             "batch passed to the generator must be a mapping."
         )
@@ -51,13 +50,13 @@ class TokenActivationStep:
                 for name in self._layer_names
             }
 
-        sequence_output = SequenceOutput(
+        sequence_output = SequenceActivationOutput(
             logits=raw_output.logits,
             loss=raw_output.loss,
             activations=activations,
         )
 
-        return TokenOutput.from_sequence(
+        return TokenActivationOutput.from_sequence(
             sequence_output,
             mask=mask,
             labels=batch.get("labels"),

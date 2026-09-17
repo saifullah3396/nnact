@@ -23,8 +23,7 @@ import h5py
 import numpy as np
 import torch
 
-from nnact._types import RunMetadata
-from nnact.store._keys import (
+from nnact._store._keys import (
     HASH_KEY,
     IDS_KEY,
     LAYERS_GROUP,
@@ -32,7 +31,12 @@ from nnact.store._keys import (
     STR_DTYPE,
     sample_id_hash,
 )
-from nnact.store._store import ActivationStore, H5ActivationStore, MemoryActivationStore
+from nnact._store._store import (
+    ActivationStore,
+    H5ActivationStore,
+    MemoryActivationStore,
+)
+from nnact._types import RunMetadata
 
 
 class ActivationWriter(ABC):

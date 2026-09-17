@@ -4,13 +4,12 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 import torch
-from torch.nn import functional as F
-
 from nnact._generator._utils import _assert_shape
+from torch.nn import functional as F
 
 
 @dataclass(frozen=True, kw_only=True)
-class SequenceOutput:
+class SequenceActivationOutput:
     logits: torch.Tensor
     loss: torch.Tensor | None = None
     labels: torch.Tensor | None = None

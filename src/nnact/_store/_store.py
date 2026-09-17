@@ -1,18 +1,3 @@
-"""Read-only views over captured activations.
-
-A store is a :class:`torch.utils.data.Dataset` yielding one
-:class:`~nnact._types.ActivatedSample` per index, so it can be fed straight
-into a :class:`~torch.utils.data.DataLoader` for downstream probing.
-
-Two implementations are provided:
-
-* :class:`MemoryActivationStore` keeps every activation resident in RAM.
-* :class:`H5ActivationStore` reads one sample at a time from an HDF5 file.
-
-Both are produced by the corresponding writer in :mod:`nnact.store._writer`;
-construct them directly only when you already hold the underlying data.
-"""
-
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -23,14 +8,14 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from nnact._types import ActivatedSample, LayerActivation, RunMetadata
-from nnact.store._keys import (
+from nnact._store._keys import (
     HASH_KEY,
     IDS_KEY,
     LAYERS_GROUP,
     METADATA_KEY,
     sample_id_hash,
 )
+from nnact._types import ActivatedSample, LayerActivation, RunMetadata
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -274,7 +259,7 @@ class MemoryActivationStore(ActivationStore):
             activations=[
                 LayerActivation(layer_name=name, tensor=tensor[idx])
                 for name, tensor in self._activations.items()
-            ]
+            ],
         )
 
     @override

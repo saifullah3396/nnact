@@ -4,14 +4,13 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 import torch
-from torch.nn import functional as F
-
-from nnact._generator._outputs._sequence import SequenceOutput
+from nnact._generator._outputs._sequence import SequenceActivationOutput
 from nnact._generator._utils import _assert_shape
+from torch.nn import functional as F
 
 
 @dataclass(frozen=True, kw_only=True)
-class TokenOutput:
+class TokenActivationOutput:
     logits: torch.Tensor
     offsets: torch.Tensor
     loss: torch.Tensor | None = None
@@ -52,10 +51,10 @@ class TokenOutput:
     @classmethod
     def from_sequence(
         cls,
-        output: SequenceOutput,
+        output: SequenceActivationOutput,
         mask: torch.Tensor,
         labels: torch.Tensor | None = None,
-    ) -> TokenOutput:
+    ) -> TokenActivationOutput:
         _assert_shape(
             "mask",
             mask,

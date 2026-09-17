@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 import torch
+from nnact._generator._steps._runner import ActivationGenerator
+from nnact._types import RunMetadata
 from torch.utils.data import DataLoader
 
-from nnact._generator._generator import ActivationGenerator
 from nnact._model._hooked import HookedModel
-from nnact._types import RunMetadata
-from nnact.store import (
+from nnact._store import (
     H5ActivationStore,
     H5ActivationWriter,
     MemoryActivationStore,
