@@ -235,3 +235,8 @@ class H5TokenActivationDataset(_H5ActivationDataset):
     def sequence_lengths(self) -> np.ndarray:
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
+
+    @property
+    def sample_of_token(self) -> np.ndarray:
+        """Which accumulated sample each flat token index belongs to."""
+        return np.repeat(np.arange(len(self)), self.sequence_lengths)

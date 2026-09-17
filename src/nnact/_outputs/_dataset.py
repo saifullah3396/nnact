@@ -193,6 +193,11 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
 
+    @property
+    def sample_of_token(self) -> np.ndarray:
+        """Which accumulated sample each flat token index belongs to."""
+        return np.repeat(np.arange(len(self)), self.sequence_lengths)
+
     @override
     def __len__(self) -> int:
         return max(self.offsets.size - 1, 0)
@@ -217,9 +222,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         import pandas as pd
 
         offsets = self.offsets
-        sample_of_token = np.repeat(np.arange(len(self)), self.sequence_lengths)
-
-        columns: dict[str, object] = {"sample": sample_of_token.tolist()}
+        columns: dict[str, object] = {"sample": self.sample_of_token.tolist()}
 
         token_ids = self.token_ids
         if token_ids is not None:

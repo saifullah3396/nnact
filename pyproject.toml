@@ -26,6 +26,11 @@ examples = [
     "tqdm>=4.70.1",
     "transformers>=5.17.0",
 ]
+probing = [
+    "cuml-cu12>=25.2.0",
+    "cupy-cuda12x>=13.3.0",
+    "scikit-learn>=1.5",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
