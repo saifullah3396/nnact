@@ -6,16 +6,16 @@ from typing import TYPE_CHECKING, final, override
 import h5py
 import numpy as np
 import torch
+from nnact._types import ActivatedSample, LayerActivation, RunMetadata
 from torch.utils.data import Dataset
 
-from nnact._store._keys import (
+from nnact.tmp._store._keys import (
     HASH_KEY,
     IDS_KEY,
     LAYERS_GROUP,
     METADATA_KEY,
     sample_id_hash,
 )
-from nnact._types import ActivatedSample, LayerActivation, RunMetadata
 
 if TYPE_CHECKING:
     import pandas as pd
