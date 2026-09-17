@@ -15,6 +15,7 @@ LOSS_KEY = "loss"
 LABELS_KEY = "labels"
 TOKEN_IDS_KEY = "token_ids"
 TOKENS_KEY = "tokens"
+OFFSETS_KEY = "offsets"
 LAYERS_GROUP = "activations"
 STR_DTYPE = h5py.string_dtype(encoding="utf-8")
 
@@ -24,18 +25,14 @@ class _H5ActivationDataset(ActivationDataset):
 
     Each batch opens the backing file, appends to it, and closes it again,
     so no file handle is held between batches. Memory use stays flat in the
-    number of samples. The file is truncated on construction; the run's
+    number of samples. Construction does not touch the file, so pointing
+    this at a path from a previous run reuses that cache as-is; the run's
     :class:`~nnact._steps._accumulator.ActivationAccumulator` is responsible
     for removing it if the run fails (see :meth:`close`).
     """
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with h5py.File(self._path, "w"):
-            pass
-        self._layer_names: list[str] = []
-        self._num_samples = 0
 
     @property
     def path(self) -> Path:
@@ -58,18 +55,16 @@ class _H5ActivationDataset(ActivationDataset):
     def _append_activations(
         self, file: h5py.File, activations: dict[str, np.ndarray]
     ) -> None:
-        assert not self._layer_names or set(activations) == set(self._layer_names), (
+        existing = set(file[LAYERS_GROUP].keys()) if LAYERS_GROUP in file else set()
+        assert not existing or set(activations) == existing, (
             f"Batch has layers {sorted(activations)} but dataset already holds "
-            f"{sorted(self._layer_names)}."
+            f"{sorted(existing)}."
         )
         for name, array in activations.items():
             key = f"{LAYERS_GROUP}/{name}"
-            is_new = key not in file
             self._append_dataset(
                 file, key, array.astype(np.float32, copy=False), np.float32
             )
-            if is_new:
-                self._layer_names.append(name)
 
     def _read_dataset(self, key: str) -> np.ndarray | None:
         with h5py.File(self._path, "r") as file:
@@ -80,20 +75,20 @@ class _H5ActivationDataset(ActivationDataset):
     @property
     @override
     def layer_names(self) -> list[str]:
-        return list(self._layer_names)
+        if not self._path.exists():
+            return []
+        with h5py.File(self._path, "r") as file:
+            group = file.get(LAYERS_GROUP)
+            return list(group.keys()) if group is not None else []
 
     @property
     @override
     def activations(self) -> dict[str, np.ndarray]:
         with h5py.File(self._path, "r") as file:
-            return {
-                name: np.asarray(file[f"{LAYERS_GROUP}/{name}"][...])
-                for name in self._layer_names
-            }
-
-    @override
-    def __len__(self) -> int:
-        return self._num_samples
+            group = file.get(LAYERS_GROUP)
+            if group is None:
+                return {}
+            return {name: np.asarray(ds[...]) for name, ds in group.items()}
 
     def print_cache_info(self) -> None:
         """Print the backing file's path and its current size on disk."""
@@ -133,7 +128,10 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
 
             self._append_activations(file, output.activations)
 
-        self._num_samples += output.logits.shape[0]
+    @override
+    def __len__(self) -> int:
+        logits = self._read_dataset(LOGITS_KEY)
+        return 0 if logits is None else logits.shape[0]
 
     @property
     def logits(self) -> np.ndarray:
@@ -158,10 +156,6 @@ class H5TokenActivationDataset(_H5ActivationDataset):
     ``(n_tokens, ...)`` layout per layer; :attr:`offsets` records where each
     sample's tokens begin and end within that layout.
     """
-
-    def __init__(self, path: str | Path) -> None:
-        super().__init__(path)
-        self._offsets: list[int] = [0]
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
         with h5py.File(self._path, "a") as file:
@@ -189,13 +183,22 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
             self._append_activations(file, output.activations)
 
-        base = self._offsets[-1]
-        self._offsets.extend((base + output.offsets[1:]).tolist())
-        self._num_samples = len(self._offsets) - 1
+            existing_offsets = file.get(OFFSETS_KEY)
+            base = int(existing_offsets[-1]) if existing_offsets is not None and existing_offsets.shape[0] else 0
+            new_offsets = (base + output.offsets[1:]).astype(np.int64)
+            self._append_dataset(file, OFFSETS_KEY, new_offsets, np.int64)
 
     @property
     def offsets(self) -> np.ndarray:
-        return np.asarray(self._offsets, dtype=np.int64)
+        tail = self._read_dataset(OFFSETS_KEY)
+        if tail is None:
+            tail = np.zeros(0, dtype=np.int64)
+        return np.concatenate([np.zeros(1, dtype=np.int64), tail])
+
+    @override
+    def __len__(self) -> int:
+        tail = self._read_dataset(OFFSETS_KEY)
+        return 0 if tail is None else tail.shape[0]
 
     @property
     def logits(self) -> np.ndarray:

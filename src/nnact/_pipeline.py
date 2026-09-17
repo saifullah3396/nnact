@@ -113,6 +113,9 @@ class ActivationPipeline:
         )
 
     def run(self, loader: Iterable[Mapping[str, Any]]) -> ActivationDataset:
+        if len(self._accumulator.dataset) > 0:
+            return self._accumulator.dataset
+
         started_at = datetime.now(UTC)
         logger.info(
             "Starting run: model=%s, output_type=%s",
