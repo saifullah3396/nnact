@@ -21,20 +21,18 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neo-125m")
     tokenizer.pad_token = tokenizer.eos_token  # GPT-Neo ships without a pad token
     model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-125m")
-    dataset = WikiTextSamples(tokenizer, n=32, max_length=64)
+    dataset = WikiTextSamples(tokenizer=tokenizer, n=32, max_length=64)
     num_layers = model.config.num_layers
     layers = [f"transformer.h.{i}" for i in range(num_layers)] + ["transformer.ln_f"]
     print(f"{len(dataset)} passages | {len(layers)} layers: {layers}")
 
-    # run_dir is required for every run: it holds run.log and run_metadata.json.
     pipeline = ActivationPipeline(
-        model,
-        layers,
+        model=model,
+        layer_names=layers,
         output_type="token",
-        run_dir=Path("runs") / "02_gpt2_residual_stream",
     )
-    activations = pipeline.run(dataset, batch_size=16)
-    print(activations.summary())
+    run_result = pipeline.run(dataset=dataset, batch_size=16)
+    print(run_result.dataset.summary())
 
 
 if __name__ == "__main__":

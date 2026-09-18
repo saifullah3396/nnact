@@ -14,11 +14,19 @@ from nnact._steps._accumulator import ActivationAccumulator
 from nnact._steps._sequence import SequenceActivationStep
 from nnact._steps._token import TokenActivationStep
 
-logger = get_logger(__name__)
+logger = get_logger(name=__name__)
 
 
 @final
 class ActivationStepRunner:
+    """Drives an Ignite engine over a loader, one step call per batch.
+
+    Builds the right step (:class:`~nnact._steps._sequence.SequenceActivationStep`
+    or :class:`~nnact._steps._token.TokenActivationStep`) for ``output_type``,
+    wraps it in an ``ignite.engine.Engine``, and attaches every handler in
+    ``handlers`` plus an optional progress bar.
+    """
+
     def __init__(
         self,
         output_type: Literal["sequence", "token"],
@@ -30,6 +38,25 @@ class ActivationStepRunner:
         show_progress: bool = True,
         log_progress_to_file: bool = False,
     ) -> None:
+        """Build the step and the engine that will run it.
+
+        Args:
+            output_type: ``"token"`` or ``"sequence"`` -- selects which
+                step class to build.
+            hooked_model: The model to run, already wrapped for activation
+                capture.
+            layer_names: Layers to capture on every batch.
+            device: Device to run the model on.
+            tokenizer: Passed through to a ``"token"`` step to decode token
+                strings; ignored for ``"sequence"``.
+            handlers: Attached to the engine so each one sees every
+                completed batch -- typically an
+                :class:`~nnact._steps._accumulator.ActivationAccumulator`.
+            show_progress: Whether to attach a console progress bar.
+            log_progress_to_file: If ``True`` (and ``show_progress`` is
+                ``True``), also forward the progress bar's rendered lines
+                to ``logger`` via :class:`~nnact._logging.TqdmToLogger`.
+        """
         self._step = self._build_step(
             output_type=output_type,
             hooked_model=hooked_model,
@@ -52,6 +79,23 @@ class ActivationStepRunner:
         device: torch.device | str = "cpu",
         tokenizer: PreTrainedTokenizerBase | None,
     ) -> SequenceActivationStep | TokenActivationStep:
+        """Construct the step matching ``output_type``.
+
+        Args:
+            output_type: See :meth:`__init__`.
+            hooked_model: See :meth:`__init__`.
+            layer_names: See :meth:`__init__`.
+            device: See :meth:`__init__`.
+            tokenizer: See :meth:`__init__`.
+
+        Returns:
+            A ``SequenceActivationStep`` for ``"sequence"``, or a
+            ``TokenActivationStep`` for ``"token"``.
+
+        Raises:
+            AssertionError: If ``output_type`` isn't ``"sequence"`` or
+                ``"token"``.
+        """
         assert output_type in ("sequence", "token"), (
             f"Unknown output_type '{output_type}', expected 'sequence' or 'token'."
         )
@@ -74,24 +118,45 @@ class ActivationStepRunner:
         show_progress: bool,
         log_progress_to_file: bool,
     ) -> tuple[Engine, Timer]:
-        """Build the Ignite engine and attach run-level handlers."""
+        """Build the Ignite engine and attach run-level handlers.
+
+        Args:
+            handlers: See :meth:`__init__`.
+            show_progress: See :meth:`__init__`.
+            log_progress_to_file: See :meth:`__init__`.
+
+        Returns:
+            The engine (with every handler and, if requested, a progress
+            bar attached) and a ``Timer`` measuring total run time.
+        """
         engine = Engine(self._step)
         timer = Timer(average=False).attach(engine)
 
         for handler in handlers:
-            handler.attach(engine)
+            handler.attach(engine=engine)
 
         if show_progress:
             from ignite.contrib.handlers import ProgressBar
 
             tqdm_kwargs = {}
             if log_progress_to_file:
-                tqdm_kwargs["file"] = TqdmToLogger(logger)
+                tqdm_kwargs["file"] = TqdmToLogger(logger=logger)
             ProgressBar(desc="activations", **tqdm_kwargs).attach(engine)
 
         return engine, timer
 
     def run(self, loader: Any) -> tuple[Engine, Timer]:
+        """Prepare the model and run one epoch over ``loader``.
+
+        Args:
+            loader: Yields batches for the step to consume -- typically a
+                ``torch.utils.data.DataLoader`` built by
+                :func:`~nnact._pipeline.activation_loader`.
+
+        Returns:
+            The engine that ran (its handlers have already seen every
+            batch by the time this returns) and the run's ``Timer``.
+        """
         self._step._prepare_model()
         self._engine.run(loader, max_epochs=1)
         return self._engine, self._timer

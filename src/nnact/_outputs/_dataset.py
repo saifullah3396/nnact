@@ -80,7 +80,12 @@ class ActivationDataset(Dataset, ABC):
 
 @final
 class InMemorySequenceActivationDataset(ActivationDataset):
-    """Activations accumulated in memory from :class:`SequenceActivationOutput` batches."""
+    """Activations accumulated in memory from :class:`SequenceActivationOutput` batches.
+
+    Every batch's arrays are held as-is and only concatenated lazily, on
+    each property access -- cheap to accumulate, at the cost of
+    re-concatenating on every read.
+    """
 
     def __init__(self) -> None:
         self._predictions: list[np.ndarray] = []
@@ -90,6 +95,7 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         self._activations: dict[str, list[np.ndarray]] = {}
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
+        """Append one batch's fields to this dataset's accumulated lists."""
         self._predictions.append(output.prediction)
         self._top_probabilities.append(output.top_probability)
         if output.loss is not None:
@@ -106,18 +112,22 @@ class InMemorySequenceActivationDataset(ActivationDataset):
 
     @property
     def prediction(self) -> np.ndarray:
+        """The model's own argmax prediction, one per sample."""
         return np.concatenate(self._predictions, axis=0)
 
     @property
     def top_probability(self) -> np.ndarray:
+        """Softmax probability of :attr:`prediction`, one per sample."""
         return np.concatenate(self._top_probabilities, axis=0)
 
     @property
     def loss(self) -> np.ndarray | None:
+        """Per-sample loss, or ``None`` if no batch ever provided one."""
         return np.concatenate(self._losses, axis=0) if self._losses else None
 
     @property
     def labels(self) -> np.ndarray | None:
+        """Ground-truth label per sample, or ``None`` if none were provided."""
         return np.concatenate(self._labels, axis=0) if self._labels else None
 
     @property
@@ -135,7 +145,12 @@ class InMemorySequenceActivationDataset(ActivationDataset):
 
 @final
 class InMemoryTokenActivationDataset(ActivationDataset):
-    """Activations accumulated in memory from :class:`TokenActivationOutput` batches."""
+    """Activations accumulated in memory from :class:`TokenActivationOutput` batches.
+
+    Every batch's arrays are held as-is and only concatenated lazily, on
+    each property access -- cheap to accumulate, at the cost of
+    re-concatenating on every read.
+    """
 
     def __init__(self) -> None:
         self._offsets: list[np.ndarray] = [np.zeros(1, dtype=np.int64)]
@@ -148,6 +163,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         self._tokens: list[np.ndarray] = []
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
+        """Append one batch's fields, rebasing its offsets onto the running total."""
         base = self._offsets[-1][-1]
         self._offsets.append(output.offsets[1:] + base)
         self._predictions.append(output.prediction)
@@ -170,22 +186,27 @@ class InMemoryTokenActivationDataset(ActivationDataset):
 
     @property
     def offsets(self) -> np.ndarray:
+        """Sample boundaries into the flat token layout, shape ``(len(self) + 1,)``."""
         return np.concatenate(self._offsets, axis=0)
 
     @property
     def prediction(self) -> np.ndarray:
+        """The model's own argmax prediction, one per real token."""
         return np.concatenate(self._predictions, axis=0)
 
     @property
     def top_probability(self) -> np.ndarray:
+        """Softmax probability of :attr:`prediction`, one per real token."""
         return np.concatenate(self._top_probabilities, axis=0)
 
     @property
     def loss(self) -> np.ndarray | None:
+        """Per-token loss, or ``None`` if no batch ever provided one."""
         return np.concatenate(self._losses, axis=0) if self._losses else None
 
     @property
     def labels(self) -> np.ndarray | None:
+        """Ground-truth label per real token, or ``None`` if none were provided."""
         return np.concatenate(self._labels, axis=0) if self._labels else None
 
     @property
@@ -198,14 +219,17 @@ class InMemoryTokenActivationDataset(ActivationDataset):
 
     @property
     def token_ids(self) -> np.ndarray | None:
+        """Input token id per real token, or ``None`` if none were provided."""
         return np.concatenate(self._token_ids, axis=0) if self._token_ids else None
 
     @property
     def tokens(self) -> np.ndarray | None:
+        """Decoded token string per real token, or ``None`` if none were provided."""
         return np.concatenate(self._tokens, axis=0) if self._tokens else None
 
     @property
     def sequence_lengths(self) -> np.ndarray:
+        """Real token count per sample, shape ``(len(self),)``."""
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
 

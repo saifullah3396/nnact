@@ -11,6 +11,30 @@ from nnact._outputs._utils import _assert_leading_shape, _assert_shape
 
 @dataclass(frozen=True, kw_only=True)
 class TokenActivationOutput:
+    """One batch's worth of activations, one row per real (non-padding) token.
+
+    Returned by :class:`~nnact._steps._token.TokenActivationStep` for each
+    batch, built via :meth:`from_sequence` from a
+    :class:`~nnact._outputs._sequence.SequenceActivationOutput` by dropping
+    every padding position. Multiple samples' tokens are concatenated into
+    one flat ``(num_tokens, ...)`` layout; :attr:`offsets` records where
+    each sample's tokens begin and end within it.
+
+    Attributes:
+        prediction: The model's own argmax prediction, one per real token,
+            shape ``(num_tokens,)``.
+        top_probability: Softmax probability of ``prediction``, same shape.
+        offsets: Sample boundaries into the flat token layout, shape
+            ``(batch_size + 1,)``. Sample ``i``'s tokens are
+            ``[offsets[i], offsets[i + 1])``.
+        loss: The model's own loss per real token, if it computed one.
+        labels: Ground-truth label per real token, if provided.
+        activations: Captured layer outputs, keyed by layer name, each
+            shaped ``(num_tokens, *feature)``.
+        token_ids: The input token id per real token, if provided.
+        tokens: The decoded token string per real token, if provided.
+    """
+
     prediction: np.ndarray
     top_probability: np.ndarray
     offsets: np.ndarray
@@ -21,15 +45,26 @@ class TokenActivationOutput:
     tokens: np.ndarray | None = None
 
     def __post_init__(self):
-        _assert_shape("prediction", self.prediction, (None,))
+        """Validate every field's shape and ``offsets``'s invariants.
+
+        Raises:
+            AssertionError: If any field's shape doesn't match
+                ``(num_tokens,)`` (or a layer's leading shape doesn't), if
+                ``tokens`` has the wrong length, or if ``offsets`` isn't a
+                nondecreasing integer array starting at ``0`` and ending at
+                ``num_tokens``.
+        """
+        _assert_shape(name="prediction", tensor=self.prediction, shape=(None,))
 
         num_tokens = self.prediction.shape[0]
 
-        _assert_shape("top_probability", self.top_probability, (num_tokens,))
-        _assert_shape("loss", self.loss, (num_tokens,))
-        _assert_shape("labels", self.labels, (num_tokens,))
-        _assert_shape("offsets", self.offsets, (None,))
-        _assert_shape("token_ids", self.token_ids, (num_tokens,))
+        _assert_shape(
+            name="top_probability", tensor=self.top_probability, shape=(num_tokens,)
+        )
+        _assert_shape(name="loss", tensor=self.loss, shape=(num_tokens,))
+        _assert_shape(name="labels", tensor=self.labels, shape=(num_tokens,))
+        _assert_shape(name="offsets", tensor=self.offsets, shape=(None,))
+        _assert_shape(name="token_ids", tensor=self.token_ids, shape=(num_tokens,))
 
         if self.tokens is not None:
             assert len(self.tokens) == num_tokens, (
@@ -38,9 +73,9 @@ class TokenActivationOutput:
 
         for name, tensor in self.activations.items():
             _assert_leading_shape(
-                f"activation '{name}'",
-                tensor,
-                (num_tokens,),
+                name=f"activation '{name}'",
+                tensor=tensor,
+                shape=(num_tokens,),
             )
 
         # Offsets must contain integer indices.
@@ -67,20 +102,39 @@ class TokenActivationOutput:
         token_ids: np.ndarray | None = None,
         tokens: np.ndarray | None = None,
     ) -> TokenActivationOutput:
+        """Build a token-level output by dropping ``output``'s padding.
+
+        Args:
+            output: The sequence-level batch to flatten.
+            mask: Boolean (or 0/1) array, shape
+                ``(output.batch_size, output.sequence_length)`` -- ``True``
+                (or nonzero) at every real token to keep.
+            labels: Ground-truth label per position, same shape as
+                ``mask``, masked the same way.
+            token_ids: Input token id per position, same shape as ``mask``,
+                masked the same way.
+            tokens: Decoded token string per position, same shape as
+                ``mask``, masked the same way.
+
+        Returns:
+            A new instance holding only the positions ``mask`` keeps,
+            concatenated across samples in order, with :attr:`offsets`
+            recording each sample's boundaries in the result.
+        """
         _assert_shape(
-            "mask",
-            mask,
-            (output.batch_size, output.sequence_length),
+            name="mask",
+            tensor=mask,
+            shape=(output.batch_size, output.sequence_length),
         )
         _assert_shape(
-            "labels",
-            labels,
-            (output.batch_size, output.sequence_length),
+            name="labels",
+            tensor=labels,
+            shape=(output.batch_size, output.sequence_length),
         )
         _assert_shape(
-            "token_ids",
-            token_ids,
-            (output.batch_size, output.sequence_length),
+            name="token_ids",
+            tensor=token_ids,
+            shape=(output.batch_size, output.sequence_length),
         )
 
         mask = mask.astype(bool)
@@ -102,15 +156,19 @@ class TokenActivationOutput:
 
     @cached_property
     def batch_size(self) -> int:
+        """Number of samples this output was built from."""
         return self.offsets.size - 1
 
     @cached_property
     def num_tokens(self) -> int:
+        """Total real tokens across every sample."""
         return self.prediction.shape[0]
 
     @cached_property
     def sequence_lengths(self) -> np.ndarray:
+        """Real token count per sample, shape ``(batch_size,)``."""
         return self.offsets[1:] - self.offsets[:-1]
 
     def __len__(self) -> int:
+        """Number of samples this output was built from -- see :attr:`batch_size`."""
         return self.batch_size

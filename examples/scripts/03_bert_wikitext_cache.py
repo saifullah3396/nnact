@@ -22,23 +22,23 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     model = AutoModelForTokenClassification.from_pretrained("bert-base-uncased")
 
-    dataset = WikiTextSamples(tokenizer, n=32, max_length=64)
+    dataset = WikiTextSamples(tokenizer=tokenizer, n=32, max_length=64)
     print(
         f"{len(dataset)} passages | input_ids "
         f"{tuple(dataset[0].model_input.input_ids.shape)}"
     )
 
     pipeline = ActivationPipeline(
-        model,
-        ["bert.encoder.layer.5"],
+        model=model,
+        layer_names=["bert.encoder.layer.5"],
         output_type="token",
         tokenizer=tokenizer,
         cache_outputs=True,
-        run_dir=Path("runs") / "03_bert_wikitext_cache",
+        cache_dir=Path("runs") / "03_bert_wikitext_cache",
     )
-    activations = pipeline.run(dataset, batch_size=16)
-    print(activations.summary())
-    activations.print_cache_info()
+    run_result = pipeline.run(dataset=dataset, batch_size=16)
+    print(run_result.dataset.summary())
+    run_result.dataset.print_cache_info()
 
 
 if __name__ == "__main__":

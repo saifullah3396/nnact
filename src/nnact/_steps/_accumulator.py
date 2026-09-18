@@ -23,11 +23,11 @@ class ActivationAccumulator(ABC):
     """Ignite handler that builds an :class:`ActivationDataset` as batches complete.
 
     Attach with :meth:`attach`, run the pipeline, then read :attr:`dataset`.
-
-    Example:
-        >>> accumulator = InMemorySequenceActivationAccumulator()
-        >>> engine, timer = pipeline.run(loader, handlers=[accumulator])  # doctest: +SKIP
-        >>> accumulator.dataset.activations["fc1"].shape  # doctest: +SKIP
+    :class:`~nnact._pipeline.ActivationPipeline` creates and attaches one of
+    these itself; user code reads :attr:`dataset` from the
+    :class:`~nnact._pipeline.RunResult` that
+    :meth:`~nnact._pipeline.ActivationPipeline.run` returns, rather than
+    constructing an accumulator directly.
     """
 
     @property
@@ -42,11 +42,26 @@ class ActivationAccumulator(ABC):
         """Append one batch's output to the dataset being built."""
 
     def attach(self, engine: Engine) -> None:
+        """Register this accumulator's callbacks on ``engine``.
+
+        Args:
+            engine: The Ignite engine running the activation steps.
+        """
         engine.add_event_handler(Events.ITERATION_COMPLETED, self)
         engine.add_event_handler(Events.COMPLETED, self._on_completed)
         engine.add_event_handler(Events.EXCEPTION_RAISED, self._on_exception)
 
     def __call__(self, engine: Engine) -> None:
+        """Ignite's ``ITERATION_COMPLETED`` callback: accumulate the latest output.
+
+        Args:
+            engine: The running engine; ``engine.state.output`` is this
+                iteration's step result.
+
+        Raises:
+            AssertionError: If ``engine.state.output`` isn't a
+                ``SequenceActivationOutput`` or ``TokenActivationOutput``.
+        """
         output = engine.state.output
         assert isinstance(output, (SequenceActivationOutput, TokenActivationOutput)), (
             f"Expected a SequenceActivationOutput or TokenActivationOutput, "
@@ -129,7 +144,7 @@ class H5SequenceActivationAccumulator(_H5ActivationAccumulator):
     """Streams :class:`SequenceActivationOutput` batches to an HDF5 file."""
 
     def __init__(self, path: str | Path) -> None:
-        self._dataset = H5SequenceActivationDataset(path)
+        self._dataset = H5SequenceActivationDataset(path=path)
 
     @property
     @override
@@ -151,7 +166,7 @@ class H5TokenActivationAccumulator(_H5ActivationAccumulator):
     """Streams :class:`TokenActivationOutput` batches to an HDF5 file."""
 
     def __init__(self, path: str | Path) -> None:
-        self._dataset = H5TokenActivationDataset(path)
+        self._dataset = H5TokenActivationDataset(path=path)
 
     @property
     @override

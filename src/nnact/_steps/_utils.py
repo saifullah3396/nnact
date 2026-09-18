@@ -13,6 +13,20 @@ def _assert_shape(
     tensor: torch.Tensor | None,
     shape: tuple[int | None, ...],
 ) -> None:
+    """Assert ``tensor``'s shape matches ``shape`` exactly, dimension for dimension.
+
+    A no-op when ``tensor`` is ``None``.
+
+    Args:
+        name: Label used in the raised message.
+        tensor: The tensor to check, or ``None`` to skip.
+        shape: Expected shape. ``None`` in any position accepts any size
+            there.
+
+    Raises:
+        AssertionError: If ``tensor`` is not ``None`` and its shape doesn't
+            match.
+    """
     if tensor is None:
         return
 
@@ -31,17 +45,20 @@ def _move_tensors(value: Any, device: torch.device | str) -> Any:
             value,
             **{
                 field.name: _move_tensors(
-                    getattr(value, field.name), device
+                    value=getattr(value, field.name), device=device
                 )
                 for field in dataclasses.fields(value)
             },
         )
     if isinstance(value, Mapping):
-        return {key: _move_tensors(item, device) for key, item in value.items()}
+        return {
+            key: _move_tensors(value=item, device=device)
+            for key, item in value.items()
+        }
     if isinstance(value, tuple):
-        return tuple(_move_tensors(item, device) for item in value)
+        return tuple(_move_tensors(value=item, device=device) for item in value)
     if isinstance(value, list):
-        return [_move_tensors(item, device) for item in value]
+        return [_move_tensors(value=item, device=device) for item in value]
     return value
 
 
@@ -55,4 +72,4 @@ def _top_prediction(logits: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
     returns.
     """
     top_probability, prediction = torch.softmax(logits, dim=-1).max(dim=-1)
-    return tensor_to_numpy(prediction), tensor_to_numpy(top_probability)
+    return tensor_to_numpy(tensor=prediction), tensor_to_numpy(tensor=top_probability)

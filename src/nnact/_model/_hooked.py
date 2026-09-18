@@ -147,6 +147,30 @@ class HookedModel(nn.Module):
 
     @contextmanager
     def capture(self, layer_names: list[str]) -> Iterator[None]:
+        """Register forward hooks on ``layer_names`` for the duration of this block.
+
+        Each hooked layer's output is captured into
+        :attr:`_activations` (readable via :meth:`get_activation`) on every
+        forward pass made inside the ``with`` block; hooks are always
+        removed on exit, success or failure.
+
+        Args:
+            layer_names: Modules to hook, by name (as in
+                ``model.named_modules()``).
+
+        Yields:
+            Nothing -- run the forward pass(es) to capture inside the
+            ``with`` block, then read results via :meth:`get_activation`.
+
+        Raises:
+            ValueError: If a name in ``layer_names`` doesn't exist on the
+                wrapped model.
+            TypeError: From inside a hook, during the forward pass, if a
+                hooked layer's output is neither a ``Tensor`` nor a tuple
+                whose first element is one -- this propagates out of the
+                ``with`` block like any other exception raised during the
+                forward pass it wraps.
+        """
         self._activations.clear()
 
         handles: list[RemovableHandle] = []
@@ -180,7 +204,7 @@ class HookedModel(nn.Module):
                                 f"is not a Tensor, got {type(output)}"
                             )
 
-                        self._activations[layer_key] = tensor_to_numpy(tensor)
+                        self._activations[layer_key] = tensor_to_numpy(tensor=tensor)
 
                     return hook
 

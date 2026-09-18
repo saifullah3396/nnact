@@ -47,6 +47,19 @@ class _H5ActivationDataset(ActivationDataset):
     def _append_dataset(
         self, file: h5py.File, key: str, values: np.ndarray, dtype: object
     ) -> None:
+        """Append ``values`` to (creating, if needed) the dataset at ``key``.
+
+        Args:
+            file: The open HDF5 file to write into.
+            key: Dataset path within ``file``, e.g. ``"labels"`` or
+                ``"activations/layer0"``.
+            values: Rows to append, along axis 0. A dataset that doesn't
+                exist yet is created with this shape's trailing dimensions
+                fixed and axis 0 resizable.
+            dtype: h5py dtype for a newly created dataset -- typically
+                ``np.float32``, ``np.int64``, or ``STR_DTYPE``. Ignored if
+                the dataset already exists.
+        """
         ds = file.get(key, None)
         if ds is None:
             ds = file.create_dataset(
@@ -63,6 +76,20 @@ class _H5ActivationDataset(ActivationDataset):
     def _append_activations(
         self, file: h5py.File, activations: dict[str, np.ndarray]
     ) -> None:
+        """Append every layer's activations under ``activations/{layer}``.
+
+        Args:
+            file: The open HDF5 file to write into.
+            activations: This batch's captured layers, keyed by name. Must
+                match the file's existing layer set exactly once one batch
+                has been written -- a run can't add or drop layers partway
+                through.
+
+        Raises:
+            AssertionError: If ``activations``'s keys don't match the
+                layers already present in ``file`` (only checked once the
+                file already holds at least one batch).
+        """
         existing = set(file[LAYERS_GROUP].keys()) if LAYERS_GROUP in file else set()
         assert not existing or set(activations) == existing, (
             f"Batch has layers {sorted(activations)} but dataset already holds "
@@ -71,10 +98,14 @@ class _H5ActivationDataset(ActivationDataset):
         for name, array in activations.items():
             key = f"{LAYERS_GROUP}/{name}"
             self._append_dataset(
-                file, key, array.astype(np.float32, copy=False), np.float32
+                file=file,
+                key=key,
+                values=array.astype(np.float32, copy=False),
+                dtype=np.float32,
             )
 
     def _read_dataset(self, key: str) -> np.ndarray | None:
+        """Read the full contents of the dataset at ``key``, or ``None`` if absent."""
         with h5py.File(self._path, "r") as file:
             if key not in file:
                 return None
@@ -117,56 +148,63 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
     """Activations streamed to an HDF5 file from :class:`SequenceActivationOutput` batches."""
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
+        """Open the backing file, append one batch's fields, and close it again."""
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
-                file,
-                PREDICTION_KEY,
-                output.prediction.astype(np.int64, copy=False),
-                np.int64,
+                file=file,
+                key=PREDICTION_KEY,
+                values=output.prediction.astype(np.int64, copy=False),
+                dtype=np.int64,
             )
             self._append_dataset(
-                file,
-                TOP_PROBABILITY_KEY,
-                output.top_probability.astype(np.float32, copy=False),
-                np.float32,
+                file=file,
+                key=TOP_PROBABILITY_KEY,
+                values=output.top_probability.astype(np.float32, copy=False),
+                dtype=np.float32,
             )
 
             if output.loss is not None:
                 self._append_dataset(
-                    file,
-                    LOSS_KEY,
-                    output.loss.astype(np.float32, copy=False),
-                    np.float32,
+                    file=file,
+                    key=LOSS_KEY,
+                    values=output.loss.astype(np.float32, copy=False),
+                    dtype=np.float32,
                 )
 
             if output.labels is not None:
-                self._append_dataset(file, LABELS_KEY, output.labels, STR_DTYPE)
+                self._append_dataset(
+                    file=file, key=LABELS_KEY, values=output.labels, dtype=STR_DTYPE
+                )
 
-            self._append_activations(file, output.activations)
+            self._append_activations(file=file, activations=output.activations)
 
     @override
     def __len__(self) -> int:
-        prediction = self._read_dataset(PREDICTION_KEY)
+        prediction = self._read_dataset(key=PREDICTION_KEY)
         return 0 if prediction is None else prediction.shape[0]
 
     @property
     def prediction(self) -> np.ndarray:
-        prediction = self._read_dataset(PREDICTION_KEY)
+        """The model's own argmax prediction, one per sample."""
+        prediction = self._read_dataset(key=PREDICTION_KEY)
         assert prediction is not None, "No batches written yet."
         return prediction
 
     @property
     def top_probability(self) -> np.ndarray:
-        top_probability = self._read_dataset(TOP_PROBABILITY_KEY)
+        """Softmax probability of :attr:`prediction`, one per sample."""
+        top_probability = self._read_dataset(key=TOP_PROBABILITY_KEY)
         assert top_probability is not None, "No batches written yet."
         return top_probability
 
     @property
     def loss(self) -> np.ndarray | None:
-        return self._read_dataset(LOSS_KEY)
+        """Per-sample loss, or ``None`` if no batch ever provided one."""
+        return self._read_dataset(key=LOSS_KEY)
 
     @property
     def labels(self) -> np.ndarray | None:
+        """Ground-truth label per sample, or ``None`` if none were provided."""
         with h5py.File(self._path, "r") as file:
             if LABELS_KEY not in file:
                 return None
@@ -188,40 +226,48 @@ class H5TokenActivationDataset(_H5ActivationDataset):
     """
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
+        """Open the backing file, append one batch's fields, and close it again."""
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
-                file,
-                PREDICTION_KEY,
-                output.prediction.astype(np.int64, copy=False),
-                np.int64,
+                file=file,
+                key=PREDICTION_KEY,
+                values=output.prediction.astype(np.int64, copy=False),
+                dtype=np.int64,
             )
             self._append_dataset(
-                file,
-                TOP_PROBABILITY_KEY,
-                output.top_probability.astype(np.float32, copy=False),
-                np.float32,
+                file=file,
+                key=TOP_PROBABILITY_KEY,
+                values=output.top_probability.astype(np.float32, copy=False),
+                dtype=np.float32,
             )
 
             if output.loss is not None:
                 self._append_dataset(
-                    file,
-                    LOSS_KEY,
-                    output.loss.astype(np.float32, copy=False),
-                    np.float32,
+                    file=file,
+                    key=LOSS_KEY,
+                    values=output.loss.astype(np.float32, copy=False),
+                    dtype=np.float32,
                 )
 
             if output.labels is not None:
-                self._append_dataset(file, LABELS_KEY, output.labels, STR_DTYPE)
+                self._append_dataset(
+                    file=file, key=LABELS_KEY, values=output.labels, dtype=STR_DTYPE
+                )
 
             if output.token_ids is not None:
                 self._append_dataset(
-                    file, TOKEN_IDS_KEY, output.token_ids, output.token_ids.dtype
+                    file=file,
+                    key=TOKEN_IDS_KEY,
+                    values=output.token_ids,
+                    dtype=output.token_ids.dtype,
                 )
 
             if output.tokens is not None:
-                self._append_dataset(file, TOKENS_KEY, output.tokens, STR_DTYPE)
+                self._append_dataset(
+                    file=file, key=TOKENS_KEY, values=output.tokens, dtype=STR_DTYPE
+                )
 
-            self._append_activations(file, output.activations)
+            self._append_activations(file=file, activations=output.activations)
 
             existing_offsets = file.get(OFFSETS_KEY)
             base = (
@@ -230,38 +276,45 @@ class H5TokenActivationDataset(_H5ActivationDataset):
                 else 0
             )
             new_offsets = (base + output.offsets[1:]).astype(np.int64)
-            self._append_dataset(file, OFFSETS_KEY, new_offsets, np.int64)
+            self._append_dataset(
+                file=file, key=OFFSETS_KEY, values=new_offsets, dtype=np.int64
+            )
 
     @property
     def offsets(self) -> np.ndarray:
-        tail = self._read_dataset(OFFSETS_KEY)
+        """Sample boundaries into the flat token layout, shape ``(len(self) + 1,)``."""
+        tail = self._read_dataset(key=OFFSETS_KEY)
         if tail is None:
             tail = np.zeros(0, dtype=np.int64)
         return np.concatenate([np.zeros(1, dtype=np.int64), tail])
 
     @override
     def __len__(self) -> int:
-        tail = self._read_dataset(OFFSETS_KEY)
+        tail = self._read_dataset(key=OFFSETS_KEY)
         return 0 if tail is None else tail.shape[0]
 
     @property
     def prediction(self) -> np.ndarray:
-        prediction = self._read_dataset(PREDICTION_KEY)
+        """The model's own argmax prediction, one per real token."""
+        prediction = self._read_dataset(key=PREDICTION_KEY)
         assert prediction is not None, "No batches written yet."
         return prediction
 
     @property
     def top_probability(self) -> np.ndarray:
-        top_probability = self._read_dataset(TOP_PROBABILITY_KEY)
+        """Softmax probability of :attr:`prediction`, one per real token."""
+        top_probability = self._read_dataset(key=TOP_PROBABILITY_KEY)
         assert top_probability is not None, "No batches written yet."
         return top_probability
 
     @property
     def loss(self) -> np.ndarray | None:
-        return self._read_dataset(LOSS_KEY)
+        """Per-token loss, or ``None`` if no batch ever provided one."""
+        return self._read_dataset(key=LOSS_KEY)
 
     @property
     def labels(self) -> np.ndarray | None:
+        """Ground-truth label per real token, or ``None`` if none were provided."""
         with h5py.File(self._path, "r") as file:
             if LABELS_KEY not in file:
                 return None
@@ -274,10 +327,12 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
     @property
     def token_ids(self) -> np.ndarray | None:
-        return self._read_dataset(TOKEN_IDS_KEY)
+        """Input token id per real token, or ``None`` if none were provided."""
+        return self._read_dataset(key=TOKEN_IDS_KEY)
 
     @property
     def tokens(self) -> np.ndarray | None:
+        """Decoded token string per real token, or ``None`` if none were provided."""
         with h5py.File(self._path, "r") as file:
             if TOKENS_KEY not in file:
                 return None
@@ -290,6 +345,7 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
     @property
     def sequence_lengths(self) -> np.ndarray:
+        """Real token count per sample, shape ``(len(self),)``."""
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
 
@@ -307,8 +363,9 @@ class H5TokenActivationDataset(_H5ActivationDataset):
             columns ``sample`` (which accumulated sample the token belongs
             to), ``token_id`` and ``token`` (present only when a tokenizer was
             given to the pipeline), ``predicted_id`` (the model's own argmax
-            prediction for that token), and one ``{layer}_norm`` column per
-            layer holding that token's activation L2 norm.
+            prediction for that token), ``predicted_probability``, ``label``,
+            and one ``{layer}_norm`` column per layer holding that token's
+            activation L2 norm.
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
