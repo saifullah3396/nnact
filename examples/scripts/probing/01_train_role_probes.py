@@ -112,7 +112,9 @@ def main() -> None:
     print(activations.summary())
 
     probe_pipeline = ProbePipeline(ProbeTrainer(ProbeConfig()))
+    summaries: dict[str, dict[str, float]] = {}
     for role_space in ROLE_COMBINATIONS:
+        role_space_key = ",".join(role[0] for role in role_space)
         cache_name = "-".join(role_space) + ".npz"
         result = probe_pipeline.run(
             activations,
@@ -120,11 +122,16 @@ def main() -> None:
             cache_path=PROBE_CACHE_DIR / cache_name,
             filter_fn=make_role_space_filter(role_space),
         )
-        print(
-            f"layer {layer_name} roles={role_space}: "
-            f"accuracy={result.accuracy:.4f} "
-            f"(train={result.num_train_rows}, test={result.num_test_rows})"
-        )
+        summaries[role_space_key] = {"layer": LAYERS_TO_PROBE, **result.dump()}
+
+    results_path = PROBE_CACHE_DIR / "results.json"
+    results_path.write_text(json.dumps(summaries, indent=2))
+
+    import pandas as pd
+
+    table = pd.DataFrame.from_dict(summaries, orient="index")
+    table.index.name = "role_space"
+    print(table.reset_index())
 
 
 if __name__ == "__main__":
