@@ -17,8 +17,6 @@ dependencies = [
     "torchvision",
     "tqdm>=4.70.1",
     "transformers",
-    "scikit-learn>=1.5",
-    "cuml-cu12>=26.8.0",
     "ml-dtypes>=0.6.0",
 ]
 
@@ -33,12 +31,6 @@ pythonpath = ["src", "."]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
 ignoreMissingTypeStubs = true
-
-[[tool.uv.index]]
-url = "https://pypi.nvidia.com/"
-
-[[tool.uv.index]]
-url = "https://pypi.nvidia.com/simple"
 
 [build-system]
 requires = ["hatchling"]

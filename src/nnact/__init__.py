@@ -1,23 +1,23 @@
 from nnact._model._hooked import HookedModel
+from nnact._outputs._dataset import ActivationDataset
+from nnact._outputs._protocols import (
+    ActivationBatch,
+    ActivationSample,
+    SequenceModelInput,
+    SequenceModelInputBatch,
+)
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
 from nnact._pipeline import ActivationPipeline
-from nnact._probing._config import ProbeConfig
-from nnact._probing._metrics import ProbeMetrics, evaluate_predictions
-from nnact._probing._pipeline import ProbePipeline
-from nnact._probing._result import EvalResult, TrainResult
-from nnact._probing._trainer import ProbeTrainer
 
 __all__ = [
+    "ActivationBatch",
+    "ActivationDataset",
     "ActivationPipeline",
-    "EvalResult",
+    "ActivationSample",
     "HookedModel",
-    "ProbeConfig",
-    "ProbeMetrics",
-    "ProbePipeline",
-    "ProbeTrainer",
     "SequenceActivationOutput",
+    "SequenceModelInput",
+    "SequenceModelInputBatch",
     "TokenActivationOutput",
-    "TrainResult",
-    "evaluate_predictions",
 ]
