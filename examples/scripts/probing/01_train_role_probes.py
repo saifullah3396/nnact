@@ -11,6 +11,7 @@ Run: python examples/scripts/probing/01_train_role_probes.py
 """
 
 import json
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,8 @@ ROLES = ["user", "assistant", "system", "tool", "cot"]
 ROLE_TO_ID = {role: index for index, role in enumerate(ROLES)}
 NO_ROLE_LABEL = -1
 LAYERS_TO_PROBE = 16
+NUM_SAMPLES = 5  # cap for a quick test run, e.g. 100; None uses the full dataset
+SAMPLE_SEED = 0
 
 
 class RoleConversationSamples(Dataset[dict[str, Any]]):
@@ -42,13 +45,13 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
     tokenization happens here -- this just loads and encodes the roles.
     """
 
-    def __init__(self, path: Path, n: int | None = None) -> None:
-        records = []
+    def __init__(self, path: Path, n: int | None = None, seed: int = 0) -> None:
         with path.open() as f:
-            for line in f:
-                records.append(json.loads(line))
-                if n is not None and len(records) >= n:
-                    break
+            records = [json.loads(line) for line in f]
+
+        if n is not None and n < len(records):
+            records = random.Random(seed).sample(records, n)
+
         self._records = records
 
     def __len__(self) -> int:
@@ -77,7 +80,9 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
     model = AutoModelForCausalLM.from_pretrained(MODEL)
 
-    dataset = RoleConversationSamples(FAKE_DATASET_PATH)
+    dataset = RoleConversationSamples(
+        FAKE_DATASET_PATH, n=NUM_SAMPLES, seed=SAMPLE_SEED
+    )
     print(f"{len(dataset)} conversations | roles: {ROLES}")
 
     layer_name = f"model.layers.{LAYERS_TO_PROBE}"

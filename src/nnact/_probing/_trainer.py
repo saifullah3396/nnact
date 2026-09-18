@@ -140,6 +140,7 @@ class ProbeTrainer:
         y_test: np.ndarray,
     ) -> ProbeResult:
         import cuml
+        import cuml.pipeline
         import cupy
 
         steps = []
