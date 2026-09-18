@@ -26,6 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from examples._utils.data import activation_loader
 from nnact import ActivationPipeline, ProbeConfig, ProbePipeline, ProbeTrainer
+from nnact._probing._trainer import FilterFn
 
 MODEL = "Qwen/Qwen3-1.7B"
 FAKE_DATASET_PATH = Path(__file__).parents[3] / "fake_dataset.jsonl"
@@ -36,6 +37,9 @@ LAYERS_TO_PROBE = 16
 NUM_SAMPLES = None  # cap for a quick test run, e.g. 100; None uses the full dataset
 SAMPLE_SEED = 0
 PROBE_CACHE_DIR = Path("runs") / "01_train_role_probes" / "probes"
+# Reference's TensorProbeTrainerConfig.skip_first_n for nested_reasoning=True --
+# drops each labeled turn's first 32 tokens (near a role-switch boundary).
+SKIP_FIRST_N = 32
 
 # Each combination gets its own probe, trained only on tokens whose role is
 # in that combination -- mirrors the reference script's role_combinations.
@@ -71,8 +75,12 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
     def __getitem__(self, idx: int) -> dict[str, Any]:
         record = self._records[idx]
         target_role = record["metadata"]["target_role"]
+        if target_role == "thinking":
+            target_role = "cot"
         labels = [
-            ROLE_TO_ID.get(role, NO_ROLE_LABEL) if role == target_role else None
+            ROLE_TO_ID.get(role, NO_ROLE_LABEL)
+            if role == target_role
+            else NO_ROLE_LABEL
             for role in record["token_roles"]
         ]
         return {
@@ -81,12 +89,52 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
             "labels": torch.tensor(labels, dtype=torch.long),
         }
 
+    def turn_positions(self) -> np.ndarray:
+        """Flattened ``token_idx_in_turn`` across all records, -1 where unset.
 
-def drop_outside_role_space(
-    *, labels: np.ndarray, sample_of_row: np.ndarray, token_ids: np.ndarray | None
-) -> np.ndarray:
-    """Keep only tokens RoleSpaceView could map into its role space."""
-    return labels != NO_ROLE_LABEL
+        ``TokenActivationOutput.from_sequence`` drops every padded position
+        (``mask = attention_mask.astype(bool)``, then ``tensor[mask]``)
+        before a sample's tokens ever reach ``ActivationDataset``, so this
+        applies the same ``attention_mask`` filter here -- otherwise this
+        array is longer than ``activations.labels`` by exactly the padded
+        token count and the two can't be compared elementwise.
+        """
+        return np.concatenate(
+            [
+                np.array(
+                    [
+                        p if p is not None else -1
+                        for p, kept in zip(
+                            record["token_idx_in_turn"],
+                            record["attention_mask"],
+                            strict=True,
+                        )
+                        if kept
+                    ],
+                    dtype=np.int64,
+                )
+                for record in self._records
+            ]
+        )
+
+
+def make_drop_outside_role_space(
+    turn_positions: np.ndarray, skip_first_n: int
+) -> FilterFn:
+    """Build a filter_fn that also skips a turn's first ``skip_first_n`` tokens.
+
+    Mirrors the reference's ``positions_in_turn >= skip_first_n`` mask --
+    without it, a role space includes tokens right at a role-switch
+    boundary that the reference always excludes, changing both the
+    eligible-token count and the fitted probe.
+    """
+
+    def drop_outside_role_space(
+        *, labels: np.ndarray, sample_of_row: np.ndarray, token_ids: np.ndarray | None
+    ) -> np.ndarray:
+        return (labels != NO_ROLE_LABEL) & (turn_positions >= skip_first_n)
+
+    return drop_outside_role_space
 
 
 class RoleSpaceView:
@@ -127,7 +175,10 @@ class RoleSpaceView:
 
 
 def main() -> None:
-    layer_name = f"model.layers.{LAYERS_TO_PROBE}"
+    # The reference probes `all_pre_mlp_hidden_states` -- the layernormed
+    # hidden state going into the MLP, not the decoder block's full output.
+    # `post_attention_layernorm` is that exact tensor's producing submodule.
+    layer_name = f"model.layers.{LAYERS_TO_PROBE}.post_attention_layernorm"
     role_space_cache_paths = {
         ",".join(role_space): PROBE_CACHE_DIR / ("-".join(role_space) + ".npz")
         for role_space in ROLE_COMBINATIONS
@@ -135,14 +186,16 @@ def main() -> None:
     all_probes_cached = all(path.exists() for path in role_space_cache_paths.values())
 
     activations = None
+    turn_positions = None
     if not all_probes_cached:
         tokenizer = AutoTokenizer.from_pretrained(MODEL)
-        model = AutoModelForCausalLM.from_pretrained(MODEL)
+        model = AutoModelForCausalLM.from_pretrained(MODEL, dtype="auto")
 
         dataset = RoleConversationSamples(
             FAKE_DATASET_PATH, n=NUM_SAMPLES, seed=SAMPLE_SEED
         )
         print(f"{len(dataset)} conversations | roles: {ROLES}")
+        turn_positions = dataset.turn_positions()
 
         activation_pipeline = ActivationPipeline(
             model,
@@ -155,6 +208,19 @@ def main() -> None:
         loader = activation_loader(dataset, batch_size=1)
         activations = activation_pipeline.run(loader)
         print(activations.summary())
+
+        global_labels = activations.labels
+        unique, counts = np.unique(global_labels, return_counts=True)
+        id_to_role = {v: k for k, v in ROLE_TO_ID.items()}
+        role_counts = {
+            id_to_role.get(label, "NO_ROLE"): int(count)
+            for label, count in zip(unique.tolist(), counts.tolist(), strict=True)
+        }
+        print(
+            f"DEBUG prepared tokens={len(global_labels)} "
+            f"samples={len(np.unique(activations.sample_of_token))} "
+            f"role_counts={role_counts}"
+        )
     else:
         print("All role-space probes already cached; skipping activation extraction.")
 
@@ -168,11 +234,23 @@ def main() -> None:
         dataset_for_role_space = (
             RoleSpaceView(activations, role_space) if activations is not None else None
         )
+        filter_fn = None
+        if dataset_for_role_space is not None:
+            filter_fn = make_drop_outside_role_space(turn_positions, SKIP_FIRST_N)
+            local_labels = dataset_for_role_space.labels
+            eligible = (local_labels != NO_ROLE_LABEL) & (
+                turn_positions >= SKIP_FIRST_N
+            )
+            role_map = {role: index for index, role in enumerate(role_space)}
+            print(
+                f"DEBUG role_space={role_space} eligible_tokens={int(eligible.sum())} "
+                f"role_map={role_map} skip_first_n={SKIP_FIRST_N}"
+            )
         result = probe_pipeline.train(
             dataset_for_role_space,
             layer_name,
             cache_path=cache_path,
-            filter_fn=drop_outside_role_space,
+            filter_fn=filter_fn,
         )
         metrics = result.metrics
         confusion_table = pd.DataFrame(

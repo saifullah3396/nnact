@@ -181,6 +181,27 @@ class ProbeTrainer:
         logger.info(
             "Fitting probe: %d train rows, %d test rows", len(y_train), len(y_test)
         )
+        missing_train_labels = set(np.unique(y_test).tolist()) - set(
+            np.unique(y_train).tolist()
+        )
+        if missing_train_labels:
+            raise ValueError(
+                f"Training split is missing label(s) {missing_train_labels} "
+                "present in the test split -- check that filter_fn/labels "
+                "actually include tokens for every role in this role space."
+            )
+        logger.info(
+            "DEBUG fit features shape=%s dtype=%s; train_labels shape=%s dtype=%s "
+            "unique=%s; test_labels shape=%s dtype=%s unique=%s",
+            x_train.shape,
+            x_train.dtype,
+            y_train.shape,
+            y_train.dtype,
+            np.unique(y_train).tolist(),
+            y_test.shape,
+            y_test.dtype,
+            np.unique(y_test).tolist(),
+        )
 
         steps = []
         if self._config.add_scaling:

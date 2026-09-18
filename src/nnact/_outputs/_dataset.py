@@ -250,7 +250,13 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         columns["predicted_id"] = self.prediction.tolist()
 
         for name, tensor in self.activations.items():
-            columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()
+            # float16 activations can exceed ~65504 in a transformer's
+            # residual stream; squaring them in-dtype for the norm overflows
+            # to inf, so compute the norm in float32 regardless of storage
+            # dtype.
+            columns[f"{name}_norm"] = np.linalg.norm(
+                tensor.astype(np.float32), axis=-1
+            ).tolist()
 
         return pd.DataFrame(
             columns, index=pd.RangeIndex(int(offsets[-1]), name="token")
