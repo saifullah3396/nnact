@@ -10,7 +10,8 @@ from nnact._outputs._dataset import ActivationDataset
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
 
-LOGITS_KEY = "logits"
+PREDICTION_KEY = "prediction"
+TOP_PROBABILITY_KEY = "top_probability"
 LOSS_KEY = "loss"
 LABELS_KEY = "labels"
 TOKEN_IDS_KEY = "token_ids"
@@ -49,7 +50,10 @@ class _H5ActivationDataset(ActivationDataset):
         ds = file.get(key, None)
         if ds is None:
             ds = file.create_dataset(
-                key, shape=(0, *values.shape[1:]), maxshape=(None, *values.shape[1:]), dtype=dtype
+                key,
+                shape=(0, *values.shape[1:]),
+                maxshape=(None, *values.shape[1:]),
+                dtype=dtype,
             )
         assert isinstance(ds, h5py.Dataset)
         start = ds.shape[0]
@@ -115,12 +119,24 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
     def _add_batch(self, output: SequenceActivationOutput) -> None:
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
-                file, LOGITS_KEY, output.logits.astype(np.float32, copy=False), np.float32
+                file,
+                PREDICTION_KEY,
+                output.prediction.astype(np.int64, copy=False),
+                np.int64,
+            )
+            self._append_dataset(
+                file,
+                TOP_PROBABILITY_KEY,
+                output.top_probability.astype(np.float32, copy=False),
+                np.float32,
             )
 
             if output.loss is not None:
                 self._append_dataset(
-                    file, LOSS_KEY, output.loss.astype(np.float32, copy=False), np.float32
+                    file,
+                    LOSS_KEY,
+                    output.loss.astype(np.float32, copy=False),
+                    np.float32,
                 )
 
             if output.labels is not None:
@@ -132,14 +148,20 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
 
     @override
     def __len__(self) -> int:
-        logits = self._read_dataset(LOGITS_KEY)
-        return 0 if logits is None else logits.shape[0]
+        prediction = self._read_dataset(PREDICTION_KEY)
+        return 0 if prediction is None else prediction.shape[0]
 
     @property
-    def logits(self) -> np.ndarray:
-        logits = self._read_dataset(LOGITS_KEY)
-        assert logits is not None, "No batches written yet."
-        return logits
+    def prediction(self) -> np.ndarray:
+        prediction = self._read_dataset(PREDICTION_KEY)
+        assert prediction is not None, "No batches written yet."
+        return prediction
+
+    @property
+    def top_probability(self) -> np.ndarray:
+        top_probability = self._read_dataset(TOP_PROBABILITY_KEY)
+        assert top_probability is not None, "No batches written yet."
+        return top_probability
 
     @property
     def loss(self) -> np.ndarray | None:
@@ -162,12 +184,24 @@ class H5TokenActivationDataset(_H5ActivationDataset):
     def _add_batch(self, output: TokenActivationOutput) -> None:
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
-                file, LOGITS_KEY, output.logits.astype(np.float32, copy=False), np.float32
+                file,
+                PREDICTION_KEY,
+                output.prediction.astype(np.int64, copy=False),
+                np.int64,
+            )
+            self._append_dataset(
+                file,
+                TOP_PROBABILITY_KEY,
+                output.top_probability.astype(np.float32, copy=False),
+                np.float32,
             )
 
             if output.loss is not None:
                 self._append_dataset(
-                    file, LOSS_KEY, output.loss.astype(np.float32, copy=False), np.float32
+                    file,
+                    LOSS_KEY,
+                    output.loss.astype(np.float32, copy=False),
+                    np.float32,
                 )
 
             if output.labels is not None:
@@ -186,7 +220,11 @@ class H5TokenActivationDataset(_H5ActivationDataset):
             self._append_activations(file, output.activations)
 
             existing_offsets = file.get(OFFSETS_KEY)
-            base = int(existing_offsets[-1]) if existing_offsets is not None and existing_offsets.shape[0] else 0
+            base = (
+                int(existing_offsets[-1])
+                if existing_offsets is not None and existing_offsets.shape[0]
+                else 0
+            )
             new_offsets = (base + output.offsets[1:]).astype(np.int64)
             self._append_dataset(file, OFFSETS_KEY, new_offsets, np.int64)
 
@@ -203,10 +241,16 @@ class H5TokenActivationDataset(_H5ActivationDataset):
         return 0 if tail is None else tail.shape[0]
 
     @property
-    def logits(self) -> np.ndarray:
-        logits = self._read_dataset(LOGITS_KEY)
-        assert logits is not None, "No batches written yet."
-        return logits
+    def prediction(self) -> np.ndarray:
+        prediction = self._read_dataset(PREDICTION_KEY)
+        assert prediction is not None, "No batches written yet."
+        return prediction
+
+    @property
+    def top_probability(self) -> np.ndarray:
+        top_probability = self._read_dataset(TOP_PROBABILITY_KEY)
+        assert top_probability is not None, "No batches written yet."
+        return top_probability
 
     @property
     def loss(self) -> np.ndarray | None:
@@ -233,10 +277,6 @@ class H5TokenActivationDataset(_H5ActivationDataset):
             )
 
     @property
-    def prediction(self) -> np.ndarray:
-        return self.logits.argmax(axis=-1)
-
-    @property
     def sequence_lengths(self) -> np.ndarray:
         offsets = self.offsets
         return offsets[1:] - offsets[:-1]
@@ -245,3 +285,43 @@ class H5TokenActivationDataset(_H5ActivationDataset):
     def sample_of_token(self) -> np.ndarray:
         """Which accumulated sample each flat token index belongs to."""
         return np.repeat(np.arange(len(self)), self.sequence_lengths)
+
+    @override
+    def summary(self) -> pd.DataFrame:
+        """Tabulate every real token held, one row per token.
+
+        Returns:
+            A :class:`pandas.DataFrame` indexed by flat token position, with
+            columns ``sample`` (which accumulated sample the token belongs
+            to), ``token_id`` and ``token`` (present only when a tokenizer was
+            given to the pipeline), ``predicted_id`` (the model's own argmax
+            prediction for that token), and one ``{layer}_norm`` column per
+            layer holding that token's activation L2 norm.
+
+        Raises:
+            ImportError: If pandas is not installed. It is not a dependency of
+                ``nnact``; use :attr:`token_ids`, :attr:`tokens`, and
+                :attr:`activations` instead.
+        """
+        import pandas as pd
+
+        offsets = self.offsets
+        columns: dict[str, object] = {"sample": self.sample_of_token.tolist()}
+
+        token_ids = self.token_ids
+        if token_ids is not None:
+            columns["token_id"] = token_ids.tolist()
+        tokens = self.tokens
+        if tokens is not None:
+            columns["token"] = tokens.tolist()
+
+        columns["predicted_id"] = self.prediction.tolist()
+        columns["predicted_probability"] = self.top_probability.tolist()
+        columns["label"] = self.labels.tolist()
+
+        for name, tensor in self.activations.items():
+            columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()
+
+        return pd.DataFrame(
+            columns, index=pd.RangeIndex(int(offsets[-1]), name="token")
+        )

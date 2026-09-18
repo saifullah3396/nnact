@@ -12,7 +12,7 @@ from nnact._model._hooked import HookedModel, tensor_to_numpy
 from nnact._outputs._protocols import ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
-from nnact._steps._utils import _move_tensors
+from nnact._steps._utils import _move_tensors, _top_prediction
 
 
 class TokenActivationStep:
@@ -29,8 +29,8 @@ class TokenActivationStep:
         self._tokenizer = tokenizer
         self._hooked_model.check_layers(self._layer_names)
 
-    def _init_model_device(self):
-        self._hooked_model = self._hooked_model.to(self._device)
+    def _prepare_model(self):
+        self._hooked_model = self._hooked_model.to(self._device).eval()
 
     @torch.no_grad()
     def __call__(
@@ -63,8 +63,11 @@ class TokenActivationStep:
                 for name in self._layer_names
             }
 
+        prediction, top_probability = _top_prediction(raw_output.logits)
+
         sequence_output = SequenceActivationOutput(
-            logits=tensor_to_numpy(raw_output.logits),
+            prediction=prediction,
+            top_probability=top_probability,
             loss=(
                 tensor_to_numpy(raw_output.loss)
                 if raw_output.loss is not None

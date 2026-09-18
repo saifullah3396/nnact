@@ -83,13 +83,15 @@ class InMemorySequenceActivationDataset(ActivationDataset):
     """Activations accumulated in memory from :class:`SequenceActivationOutput` batches."""
 
     def __init__(self) -> None:
-        self._logits: list[np.ndarray] = []
+        self._predictions: list[np.ndarray] = []
+        self._top_probabilities: list[np.ndarray] = []
         self._losses: list[np.ndarray] = []
         self._labels: list[np.ndarray] = []
         self._activations: dict[str, list[np.ndarray]] = {}
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
-        self._logits.append(output.logits)
+        self._predictions.append(output.prediction)
+        self._top_probabilities.append(output.top_probability)
         if output.loss is not None:
             self._losses.append(output.loss)
         if output.labels is not None:
@@ -103,8 +105,12 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         return list(self._activations)
 
     @property
-    def logits(self) -> np.ndarray:
-        return np.concatenate(self._logits, axis=0)
+    def prediction(self) -> np.ndarray:
+        return np.concatenate(self._predictions, axis=0)
+
+    @property
+    def top_probability(self) -> np.ndarray:
+        return np.concatenate(self._top_probabilities, axis=0)
 
     @property
     def loss(self) -> np.ndarray | None:
@@ -124,7 +130,7 @@ class InMemorySequenceActivationDataset(ActivationDataset):
 
     @override
     def __len__(self) -> int:
-        return sum(logits.shape[0] for logits in self._logits)
+        return sum(prediction.shape[0] for prediction in self._predictions)
 
 
 @final
@@ -133,7 +139,8 @@ class InMemoryTokenActivationDataset(ActivationDataset):
 
     def __init__(self) -> None:
         self._offsets: list[np.ndarray] = [np.zeros(1, dtype=np.int64)]
-        self._logits: list[np.ndarray] = []
+        self._predictions: list[np.ndarray] = []
+        self._top_probabilities: list[np.ndarray] = []
         self._losses: list[np.ndarray] = []
         self._labels: list[np.ndarray] = []
         self._activations: dict[str, list[np.ndarray]] = {}
@@ -143,7 +150,8 @@ class InMemoryTokenActivationDataset(ActivationDataset):
     def _add_batch(self, output: TokenActivationOutput) -> None:
         base = self._offsets[-1][-1]
         self._offsets.append(output.offsets[1:] + base)
-        self._logits.append(output.logits)
+        self._predictions.append(output.prediction)
+        self._top_probabilities.append(output.top_probability)
         if output.loss is not None:
             self._losses.append(output.loss)
         if output.labels is not None:
@@ -165,8 +173,12 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         return np.concatenate(self._offsets, axis=0)
 
     @property
-    def logits(self) -> np.ndarray:
-        return np.concatenate(self._logits, axis=0)
+    def prediction(self) -> np.ndarray:
+        return np.concatenate(self._predictions, axis=0)
+
+    @property
+    def top_probability(self) -> np.ndarray:
+        return np.concatenate(self._top_probabilities, axis=0)
 
     @property
     def loss(self) -> np.ndarray | None:
@@ -191,10 +203,6 @@ class InMemoryTokenActivationDataset(ActivationDataset):
     @property
     def tokens(self) -> np.ndarray | None:
         return np.concatenate(self._tokens, axis=0) if self._tokens else None
-
-    @property
-    def prediction(self) -> np.ndarray:
-        return self.logits.argmax(axis=-1)
 
     @property
     def sequence_lengths(self) -> np.ndarray:

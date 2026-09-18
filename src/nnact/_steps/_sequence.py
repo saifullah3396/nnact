@@ -9,7 +9,7 @@ from ignite.engine import Engine
 from nnact._model._hooked import HookedModel
 from nnact._outputs._protocols import ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
-from nnact._steps._utils import _move_tensors
+from nnact._steps._utils import _move_tensors, _top_prediction
 
 
 class SequenceActivationStep:
@@ -24,8 +24,8 @@ class SequenceActivationStep:
         self._device = device
         self._hooked_model.check_layers(self._layer_names)
 
-    def _init_model_device(self):
-        self._hooked_model = self._hooked_model.to(self._device)
+    def _prepare_model(self):
+        self._hooked_model = self._hooked_model.to(self._device).eval()
 
     @torch.no_grad()
     def __call__(
@@ -48,9 +48,12 @@ class SequenceActivationStep:
                 for name in self._layer_names
             }
 
+        prediction, top_probability = _top_prediction(raw_output.logits)
+
         labels = batch.get("labels")
         return SequenceActivationOutput(
-            logits=raw_output.logits.detach().cpu().numpy(),
+            prediction=prediction,
+            top_probability=top_probability,
             loss=(
                 raw_output.loss.detach().cpu().numpy()
                 if raw_output.loss is not None

@@ -6,12 +6,13 @@ from functools import cached_property
 import numpy as np
 
 from nnact._outputs._sequence import SequenceActivationOutput
-from nnact._outputs._utils import _assert_leading_shape, _assert_shape, _softmax
+from nnact._outputs._utils import _assert_leading_shape, _assert_shape
 
 
 @dataclass(frozen=True, kw_only=True)
 class TokenActivationOutput:
-    logits: np.ndarray
+    prediction: np.ndarray
+    top_probability: np.ndarray
     offsets: np.ndarray
     loss: np.ndarray | None = None
     labels: np.ndarray | None = None
@@ -20,10 +21,11 @@ class TokenActivationOutput:
     tokens: np.ndarray | None = None
 
     def __post_init__(self):
-        _assert_shape("logits", self.logits, (None, None))
+        _assert_shape("prediction", self.prediction, (None,))
 
-        num_tokens = self.logits.shape[0]
+        num_tokens = self.prediction.shape[0]
 
+        _assert_shape("top_probability", self.top_probability, (num_tokens,))
         _assert_shape("loss", self.loss, (num_tokens,))
         _assert_shape("labels", self.labels, (num_tokens,))
         _assert_shape("offsets", self.offsets, (None,))
@@ -86,7 +88,8 @@ class TokenActivationOutput:
         offsets = np.concatenate([np.zeros(1, dtype=lengths.dtype), lengths.cumsum()])
 
         return cls(
-            logits=output.logits[mask],
+            prediction=output.prediction[mask],
+            top_probability=output.top_probability[mask],
             loss=output.loss[mask] if output.loss is not None else None,
             labels=labels[mask] if labels is not None else None,
             offsets=offsets,
@@ -98,28 +101,16 @@ class TokenActivationOutput:
         )
 
     @cached_property
-    def prediction(self) -> np.ndarray:
-        return self.logits.argmax(axis=-1)
-
-    @cached_property
-    def probabilities(self) -> np.ndarray:
-        return _softmax(self.logits, axis=-1)
-
-    @cached_property
     def batch_size(self) -> int:
         return self.offsets.size - 1
 
     @cached_property
     def num_tokens(self) -> int:
-        return self.logits.shape[0]
+        return self.prediction.shape[0]
 
     @cached_property
     def sequence_lengths(self) -> np.ndarray:
         return self.offsets[1:] - self.offsets[:-1]
-
-    @cached_property
-    def num_classes(self) -> int:
-        return self.logits.shape[1]
 
     def __len__(self) -> int:
         return self.batch_size

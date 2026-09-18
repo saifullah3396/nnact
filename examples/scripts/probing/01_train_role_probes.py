@@ -33,7 +33,7 @@ ROLES = ["user", "assistant", "system", "tool", "cot"]
 ROLE_TO_ID = {role: index for index, role in enumerate(ROLES)}
 NO_ROLE_LABEL = -1
 LAYERS_TO_PROBE = 16
-NUM_SAMPLES = 50  # cap for a quick test run, e.g. 100; None uses the full dataset
+NUM_SAMPLES = None  # cap for a quick test run, e.g. 100; None uses the full dataset
 SAMPLE_SEED = 0
 PROBE_CACHE_DIR = Path("runs") / "01_train_role_probes" / "probes"
 
@@ -43,7 +43,7 @@ ROLE_COMBINATIONS = [
     ["user", "assistant"],
     ["user", "assistant", "tool"],
     ["user", "cot", "assistant"],
-    ["user", "cot", "assistant", "tool"],
+    # ["user", "cot", "assistant", "tool"],
 ]
 
 
@@ -70,7 +70,11 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         record = self._records[idx]
-        labels = [ROLE_TO_ID.get(role, NO_ROLE_LABEL) for role in record["token_roles"]]
+        target_role = record["metadata"]["target_role"]
+        labels = [
+            ROLE_TO_ID.get(role, NO_ROLE_LABEL) if role == target_role else None
+            for role in record["token_roles"]
+        ]
         return {
             "input_ids": torch.tensor(record["token_ids"], dtype=torch.long),
             "attention_mask": torch.tensor(record["attention_mask"], dtype=torch.long),
@@ -128,9 +132,7 @@ def main() -> None:
         ",".join(role_space): PROBE_CACHE_DIR / ("-".join(role_space) + ".npz")
         for role_space in ROLE_COMBINATIONS
     }
-    all_probes_cached = all(
-        path.exists() for path in role_space_cache_paths.values()
-    )
+    all_probes_cached = all(path.exists() for path in role_space_cache_paths.values())
 
     activations = None
     if not all_probes_cached:
@@ -147,7 +149,7 @@ def main() -> None:
             [layer_name],
             output_type="token",
             tokenizer=tokenizer,
-            cache_outputs=False,
+            cache_outputs=True,
             run_dir=Path("runs") / "01_train_role_probes",
         )
         loader = activation_loader(dataset, batch_size=1)
@@ -156,7 +158,9 @@ def main() -> None:
     else:
         print("All role-space probes already cached; skipping activation extraction.")
 
-    probe_pipeline = ProbePipeline(ProbeTrainer(ProbeConfig()))
+    probe_pipeline = ProbePipeline(
+        ProbeTrainer(ProbeConfig(C=1.0e-1, add_scaling=False))
+    )
     rows: list[dict[str, float | str]] = []
     for role_space in ROLE_COMBINATIONS:
         role_space_key = ",".join(role[0] for role in role_space)

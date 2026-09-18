@@ -92,6 +92,6 @@ class ActivationStepRunner:
         return engine, timer
 
     def run(self, loader: Any) -> tuple[Engine, Timer]:
-        self._step._init_model_device()
+        self._step._prepare_model()
         self._engine.run(loader, max_epochs=1)
         return self._engine, self._timer
