@@ -8,7 +8,7 @@ import torch
 from ignite.engine import Engine
 from transformers import PreTrainedTokenizerBase
 
-from nnact._model._hooked import HookedModel
+from nnact._model._hooked import HookedModel, tensor_to_numpy
 from nnact._outputs._protocols import ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
@@ -51,8 +51,9 @@ class TokenActivationStep:
             "attention_mask must be a torch.Tensor"
         )
 
+        model_inputs = {key: value for key, value in batch.items() if key != "labels"}
         with self._hooked_model.capture(self._layer_names):
-            raw_output: ModelOutput = self._hooked_model(**batch)
+            raw_output: ModelOutput = self._hooked_model(**model_inputs)
 
             activations = {
                 name: self._hooked_model.get_activation(name)
@@ -60,11 +61,9 @@ class TokenActivationStep:
             }
 
         sequence_output = SequenceActivationOutput(
-            logits=raw_output.logits.detach().cpu().numpy(),
+            logits=tensor_to_numpy(raw_output.logits),
             loss=(
-                raw_output.loss.detach().cpu().numpy()
-                if raw_output.loss is not None
-                else None
+                tensor_to_numpy(raw_output.loss) if raw_output.loss is not None else None
             ),
             activations=activations,
         )
@@ -79,8 +78,8 @@ class TokenActivationStep:
         labels = batch.get("labels")
         return TokenActivationOutput.from_sequence(
             sequence_output,
-            mask=attention_mask.detach().cpu().numpy(),
-            labels=labels.detach().cpu().numpy() if labels is not None else None,
-            token_ids=token_ids.detach().cpu().numpy(),
+            mask=tensor_to_numpy(attention_mask),
+            labels=tensor_to_numpy(labels) if labels is not None else None,
+            token_ids=tensor_to_numpy(token_ids),
             tokens=np.asarray(tokens) if tokens is not None else None,
         )

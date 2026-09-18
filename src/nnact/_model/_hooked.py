@@ -4,6 +4,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+import ml_dtypes
 import numpy as np
 import torch
 from torch import nn
@@ -11,6 +12,16 @@ from torch.utils.hooks import RemovableHandle
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert a tensor to NumPy, preserving BF16 values and dtype."""
+    tensor = tensor.detach().cpu().contiguous()
+
+    if tensor.dtype == torch.bfloat16:
+        return tensor.view(torch.int16).numpy().view(ml_dtypes.bfloat16)
+
+    return tensor.numpy()
 
 
 class HookedModel(nn.Module):
@@ -169,7 +180,7 @@ class HookedModel(nn.Module):
                                 f"is not a Tensor, got {type(output)}"
                             )
 
-                        self._activations[layer_key] = tensor.detach().cpu().numpy()
+                        self._activations[layer_key] = tensor_to_numpy(tensor)
 
                     return hook
 

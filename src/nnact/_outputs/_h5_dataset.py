@@ -39,6 +39,10 @@ class _H5ActivationDataset(ActivationDataset):
         """Path of the backing HDF5 file."""
         return self._path
 
+    @override
+    def exists(self) -> bool:
+        return self._path.exists()
+
     def _append_dataset(
         self, file: h5py.File, key: str, values: np.ndarray, dtype: object
     ) -> None:
@@ -75,8 +79,6 @@ class _H5ActivationDataset(ActivationDataset):
     @property
     @override
     def layer_names(self) -> list[str]:
-        if not self._path.exists():
-            return []
         with h5py.File(self._path, "r") as file:
             group = file.get(LAYERS_GROUP)
             return list(group.keys()) if group is not None else []

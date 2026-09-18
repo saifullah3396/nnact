@@ -113,7 +113,7 @@ class ActivationPipeline:
         )
 
     def run(self, loader: Iterable[Mapping[str, Any]]) -> ActivationDataset:
-        if len(self._accumulator.dataset) > 0:
+        if self._accumulator.dataset.exists():
             return self._accumulator.dataset
 
         started_at = datetime.now(UTC)

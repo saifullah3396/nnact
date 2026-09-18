@@ -36,6 +36,14 @@ class ActivationDataset(Dataset, ABC):
     def __len__(self) -> int:
         """Number of samples held."""
 
+    def exists(self) -> bool:
+        """Whether this dataset already holds data from a previous run.
+
+        ``False`` unless overridden, e.g. by a file-backed dataset that can
+        be pointed at an existing cache.
+        """
+        return False
+
     def layer_shape(self, layer_name: str) -> tuple[int, ...]:
         """Per-sample activation shape for one layer, excluding the sample axis."""
         return tuple(self.activations[layer_name].shape[1:])

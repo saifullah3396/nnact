@@ -19,6 +19,7 @@ dependencies = [
     "transformers",
     "scikit-learn>=1.5",
     "cuml-cu12>=26.8.0",
+    "ml-dtypes>=0.6.0",
 ]
 
 [dependency-groups]
