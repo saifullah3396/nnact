@@ -43,7 +43,9 @@ class SequenceDataset(Dataset):
 
 
 def test_token_pipeline_in_memory() -> None:
-    dataset = TokenDataset(seqs=[[1, 2, 3], [4, 5, 3]], metas=[["a", "b", "c"], ["d", "e", "c"]])
+    dataset = TokenDataset(
+        seqs=[[1, 2, 3], [4, 5, 3]], metas=[["a", "b", "c"], ["d", "e", "c"]]
+    )
     pipeline = ActivationPipeline(
         model=FakeModel(),
         layer_names=["linear"],

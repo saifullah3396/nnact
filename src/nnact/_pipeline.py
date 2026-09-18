@@ -244,12 +244,9 @@ class ActivationPipeline:
             tokenizer=tokenizer,
             handlers=[self._accumulator],
             show_progress=show_progress,
-            log_progress_to_file=False,
         )
 
-    def run(
-        self, dataset: Dataset[ActivationSample], *, batch_size: int
-    ) -> RunResult:
+    def run(self, dataset: Dataset[ActivationSample], *, batch_size: int) -> RunResult:
         """Run the model over ``dataset``, capturing the configured layers.
 
         If this pipeline was built with ``cache_outputs=True`` and its

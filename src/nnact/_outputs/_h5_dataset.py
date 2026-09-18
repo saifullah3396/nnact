@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import final, override
+from typing import TYPE_CHECKING, final, override
 
 import h5py
 import numpy as np
@@ -9,6 +9,9 @@ import numpy as np
 from nnact._outputs._dataset import ActivationDataset
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 PREDICTION_KEY = "prediction"
 TOP_PROBABILITY_KEY = "top_probability"

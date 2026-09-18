@@ -8,13 +8,10 @@ from ignite.engine import Engine
 from ignite.handlers import Timer
 from transformers import PreTrainedTokenizerBase
 
-from nnact._logging import TqdmToLogger, get_logger
 from nnact._model._hooked import HookedModel
 from nnact._steps._accumulator import ActivationAccumulator
 from nnact._steps._sequence import SequenceActivationStep
 from nnact._steps._token import TokenActivationStep
-
-logger = get_logger(name=__name__)
 
 
 @final
@@ -36,7 +33,6 @@ class ActivationStepRunner:
         tokenizer: PreTrainedTokenizerBase | None = None,
         handlers: Iterable[ActivationAccumulator] = (),
         show_progress: bool = True,
-        log_progress_to_file: bool = False,
     ) -> None:
         """Build the step and the engine that will run it.
 
@@ -53,9 +49,6 @@ class ActivationStepRunner:
                 completed batch -- typically an
                 :class:`~nnact._steps._accumulator.ActivationAccumulator`.
             show_progress: Whether to attach a console progress bar.
-            log_progress_to_file: If ``True`` (and ``show_progress`` is
-                ``True``), also forward the progress bar's rendered lines
-                to ``logger`` via :class:`~nnact._logging.TqdmToLogger`.
         """
         self._step = self._build_step(
             output_type=output_type,
@@ -67,7 +60,6 @@ class ActivationStepRunner:
         self._engine, self._timer = self._create_engine(
             handlers=handlers,
             show_progress=show_progress,
-            log_progress_to_file=log_progress_to_file,
         )
 
     def _build_step(
@@ -116,14 +108,12 @@ class ActivationStepRunner:
         *,
         handlers: Iterable[ActivationAccumulator],
         show_progress: bool,
-        log_progress_to_file: bool,
     ) -> tuple[Engine, Timer]:
         """Build the Ignite engine and attach run-level handlers.
 
         Args:
             handlers: See :meth:`__init__`.
             show_progress: See :meth:`__init__`.
-            log_progress_to_file: See :meth:`__init__`.
 
         Returns:
             The engine (with every handler and, if requested, a progress
@@ -138,10 +128,7 @@ class ActivationStepRunner:
         if show_progress:
             from ignite.contrib.handlers import ProgressBar
 
-            tqdm_kwargs = {}
-            if log_progress_to_file:
-                tqdm_kwargs["file"] = TqdmToLogger(logger=logger)
-            ProgressBar(desc="activations", **tqdm_kwargs).attach(engine)
+            ProgressBar(desc="activations").attach(engine)
 
         return engine, timer
 

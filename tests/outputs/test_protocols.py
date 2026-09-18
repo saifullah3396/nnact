@@ -113,7 +113,9 @@ def test_sequence_activation_batch_raises_on_mismatched_keys() -> None:
         SequenceActivationSample(
             model_input=make_model_input(ids=[1, 2]), metadata={"label": "user"}
         ),
-        SequenceActivationSample(model_input=make_model_input(ids=[3, 4]), metadata=None),
+        SequenceActivationSample(
+            model_input=make_model_input(ids=[3, 4]), metadata=None
+        ),
     ]
     with pytest.raises(ValueError, match="disagree"):
         SequenceActivationBatch.from_samples(samples=samples)

@@ -111,18 +111,13 @@ def _stack_model_input(
                 [model_input.token_type_ids for model_input in model_inputs]
             )
             if all(
-                model_input.token_type_ids is not None
-                for model_input in model_inputs
+                model_input.token_type_ids is not None for model_input in model_inputs
             )
             else None
         ),
         position_ids=(
-            default_collate(
-                [model_input.position_ids for model_input in model_inputs]
-            )
-            if all(
-                model_input.position_ids is not None for model_input in model_inputs
-            )
+            default_collate([model_input.position_ids for model_input in model_inputs])
+            if all(model_input.position_ids is not None for model_input in model_inputs)
             else None
         ),
     )
@@ -327,9 +322,7 @@ class TokenActivationBatch(ActivationBatch):
         metadata = _collate_metadata(samples)
         _assert_consistent_metadata_lengths(metadata=metadata)
         return cls(
-            model_input=_stack_model_input(
-                [sample.model_input for sample in samples]
-            ),
+            model_input=_stack_model_input([sample.model_input for sample in samples]),
             metadata=metadata,
         )
 
@@ -361,8 +354,6 @@ class SequenceActivationBatch(ActivationBatch):
             :func:`_collate_metadata`).
         """
         return cls(
-            model_input=_stack_model_input(
-                [sample.model_input for sample in samples]
-            ),
+            model_input=_stack_model_input([sample.model_input for sample in samples]),
             metadata=_collate_metadata(samples),
         )

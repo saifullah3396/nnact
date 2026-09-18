@@ -72,7 +72,9 @@ class TokenActivationOutput:
 
         if self.metadata is not None:
             for key, value in self.metadata.items():
-                _assert_shape(name=f"metadata[{key!r}]", tensor=value, shape=(num_tokens,))
+                _assert_shape(
+                    name=f"metadata[{key!r}]", tensor=value, shape=(num_tokens,)
+                )
 
         for name, tensor in self.activations.items():
             _assert_leading_shape(

@@ -52,8 +52,7 @@ def _move_tensors(value: Any, device: torch.device | str) -> Any:
         )
     if isinstance(value, Mapping):
         return {
-            key: _move_tensors(value=item, device=device)
-            for key, item in value.items()
+            key: _move_tensors(value=item, device=device) for key, item in value.items()
         }
     if isinstance(value, tuple):
         return tuple(_move_tensors(value=item, device=device) for item in value)
