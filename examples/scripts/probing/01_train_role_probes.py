@@ -24,7 +24,7 @@ from torch.utils.data import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from examples._utils.data import activation_loader
-from nnact import ActivationPipeline, ProbeConfig, ProbeTrainer
+from nnact import ActivationPipeline, ProbeConfig, ProbePipeline, ProbeTrainer
 
 MODEL = "Qwen/Qwen3-1.7B"
 FAKE_DATASET_PATH = Path(__file__).parents[3] / "fake_dataset.jsonl"
@@ -32,8 +32,18 @@ ROLES = ["user", "assistant", "system", "tool", "cot"]
 ROLE_TO_ID = {role: index for index, role in enumerate(ROLES)}
 NO_ROLE_LABEL = -1
 LAYERS_TO_PROBE = 16
-NUM_SAMPLES = 5  # cap for a quick test run, e.g. 100; None uses the full dataset
+NUM_SAMPLES = 20  # cap for a quick test run, e.g. 100; None uses the full dataset
 SAMPLE_SEED = 0
+PROBE_CACHE_DIR = Path("runs") / "01_train_role_probes" / "probes"
+
+# Each combination gets its own probe, trained only on tokens whose role is
+# in that combination -- mirrors the reference script's role_combinations.
+ROLE_COMBINATIONS = [
+    ["user", "assistant"],
+    ["user", "assistant", "tool"],
+    ["user", "cot", "assistant"],
+    ["user", "cot", "assistant", "tool"],
+]
 
 
 class RoleConversationSamples(Dataset[dict[str, Any]]):
@@ -67,13 +77,16 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
         }
 
 
-def drop_unlabeled_tokens(
-    *, labels: np.ndarray, sample_of_row: np.ndarray, token_ids: np.ndarray | None
-) -> np.ndarray:
-    """Keep only tokens whose role label is one of ROLES, dropping padding
-    and any token that fell outside a labeled turn (encoded as NO_ROLE_LABEL).
-    """
-    return labels != NO_ROLE_LABEL
+def make_role_space_filter(role_space: list[str]):
+    """Build a filter_fn that keeps only tokens whose role is in role_space."""
+    role_space_ids = {ROLE_TO_ID[role] for role in role_space}
+
+    def filter_fn(
+        *, labels: np.ndarray, sample_of_row: np.ndarray, token_ids: np.ndarray | None
+    ) -> np.ndarray:
+        return np.isin(labels, list(role_space_ids))
+
+    return filter_fn
 
 
 def main() -> None:
@@ -86,7 +99,7 @@ def main() -> None:
     print(f"{len(dataset)} conversations | roles: {ROLES}")
 
     layer_name = f"model.layers.{LAYERS_TO_PROBE}"
-    pipeline = ActivationPipeline(
+    activation_pipeline = ActivationPipeline(
         model,
         [layer_name],
         output_type="token",
@@ -95,15 +108,23 @@ def main() -> None:
         run_dir=Path("runs") / "01_train_role_probes",
     )
     loader = activation_loader(dataset, batch_size=1)
-    activations = pipeline.run(loader)
+    activations = activation_pipeline.run(loader)
     print(activations.summary())
 
-    trainer = ProbeTrainer(ProbeConfig())
-    result = trainer.fit(activations, layer_name, filter_fn=drop_unlabeled_tokens)
-    print(
-        f"layer {layer_name}: accuracy={result.accuracy:.4f} "
-        f"(train={result.num_train_rows}, test={result.num_test_rows})"
-    )
+    probe_pipeline = ProbePipeline(ProbeTrainer(ProbeConfig()))
+    for role_space in ROLE_COMBINATIONS:
+        cache_name = "-".join(role_space) + ".npz"
+        result = probe_pipeline.run(
+            activations,
+            layer_name,
+            cache_path=PROBE_CACHE_DIR / cache_name,
+            filter_fn=make_role_space_filter(role_space),
+        )
+        print(
+            f"layer {layer_name} roles={role_space}: "
+            f"accuracy={result.accuracy:.4f} "
+            f"(train={result.num_train_rows}, test={result.num_test_rows})"
+        )
 
 
 if __name__ == "__main__":
