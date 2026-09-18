@@ -5,18 +5,19 @@ from nnact._pipeline import ActivationPipeline
 from nnact._probing._config import ProbeConfig
 from nnact._probing._metrics import ProbeMetrics, evaluate_predictions
 from nnact._probing._pipeline import ProbePipeline
-from nnact._probing._result import ProbeResult
+from nnact._probing._result import EvalResult, TrainResult
 from nnact._probing._trainer import ProbeTrainer
 
 __all__ = [
     "ActivationPipeline",
+    "EvalResult",
     "HookedModel",
     "ProbeConfig",
     "ProbeMetrics",
     "ProbePipeline",
-    "ProbeResult",
     "ProbeTrainer",
     "SequenceActivationOutput",
     "TokenActivationOutput",
+    "TrainResult",
     "evaluate_predictions",
 ]

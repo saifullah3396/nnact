@@ -1,86 +1,60 @@
 from __future__ import annotations
 
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from nnact._probing._metrics import ProbeMetrics, evaluate_predictions
+
 
 @dataclass(frozen=True, kw_only=True)
-class ProbeResult:
-    """Outcome of fitting and evaluating one probe on a held-out split."""
+class EvalResult:
+    """Outcome of scoring a probe's predictions against ground truth.
 
-    accuracy: float
+    Returned by :meth:`~nnact._probing._trainer.ProbeTrainer.evaluate`.
+    """
+
     predictions: np.ndarray
     probabilities: np.ndarray
-    y_true: np.ndarray
-    num_train_rows: int
-    num_test_rows: int
+    targets: np.ndarray
+
+    @property
+    def metrics(self) -> ProbeMetrics:
+        return evaluate_predictions(self.targets, self.predictions)
+
+
+@dataclass(frozen=True, kw_only=True)
+class TrainResult:
+    """Outcome of fitting a probe, including the fitted estimator itself.
+
+    Returned by :meth:`~nnact._probing._trainer.ProbeTrainer.train`. Unlike
+    :class:`EvalResult`, this is cacheable: :meth:`save`/:meth:`load`
+    persist the estimator alongside the predictions, so a later
+    :meth:`~nnact._probing._trainer.ProbeTrainer.evaluate` can run against it
+    without re-fitting.
+    """
+
+    predictions: np.ndarray
+    probabilities: np.ndarray
+    targets: np.ndarray
+    estimator: Any
+
+    @property
+    def metrics(self) -> ProbeMetrics:
+        return evaluate_predictions(self.targets, self.predictions)
 
     def save(self, path: str | Path) -> None:
-        """Serialize to an ``.npz`` file, creating parent directories as needed."""
+        """Pickle this result -- arrays, metrics inputs, and the fitted
+        estimator alike -- to one file, creating parent directories as needed.
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(
-            path,
-            accuracy=self.accuracy,
-            predictions=self.predictions,
-            probabilities=self.probabilities,
-            y_true=self.y_true,
-            num_train_rows=self.num_train_rows,
-            num_test_rows=self.num_test_rows,
-        )
+        path.write_bytes(pickle.dumps(self))
 
     @classmethod
-    def load(cls, path: str | Path) -> ProbeResult:
-        """Load a :class:`ProbeResult` previously written by :meth:`save`."""
-        with np.load(path) as data:
-            return cls(
-                accuracy=float(data["accuracy"]),
-                predictions=data["predictions"],
-                probabilities=data["probabilities"],
-                y_true=data["y_true"],
-                num_train_rows=int(data["num_train_rows"]),
-                num_test_rows=int(data["num_test_rows"]),
-            )
-
-    def dump(self) -> dict[str, float]:
-        """Summarize this result as one flat row for a results table.
-
-        Returns:
-            ``acc``, ``balanced_acc``, ``nll``, ``roc_auc_macro``, and
-            confidence stats (mean confidence overall, and split by whether
-            the prediction was correct) -- everything derived from
-            :attr:`y_true` and :attr:`probabilities` alone, so it needs no
-            extra arguments.
-        """
-        from sklearn.metrics import balanced_accuracy_score, log_loss, roc_auc_score
-
-        confidence = self.probabilities[np.arange(len(self.y_true)), self.predictions]
-        correct = self.predictions == self.y_true
-        labels = np.arange(self.probabilities.shape[1])
-
-        try:
-            roc_auc_macro = roc_auc_score(
-                self.y_true,
-                self.probabilities,
-                multi_class="ovr",
-                average="macro",
-                labels=labels,
-            )
-        except ValueError:
-            roc_auc_macro = float("nan")
-
-        return {
-            "acc": self.accuracy,
-            "balanced_acc": float(balanced_accuracy_score(self.y_true, self.predictions)),
-            "nll": float(log_loss(self.y_true, self.probabilities, labels=labels)),
-            "roc_auc_macro": float(roc_auc_macro),
-            "mean_confidence": float(confidence.mean()),
-            "mean_confidence_correct": float(confidence[correct].mean())
-            if correct.any()
-            else float("nan"),
-            "mean_confidence_incorrect": float(confidence[~correct].mean())
-            if (~correct).any()
-            else float("nan"),
-        }
+    def load(cls, path: str | Path) -> TrainResult:
+        """Load a :class:`TrainResult` previously written by :meth:`save`."""
+        return pickle.loads(Path(path).read_bytes())

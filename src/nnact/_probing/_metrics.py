@@ -10,9 +10,9 @@ class ProbeMetrics:
     """Standard classification metrics for one probe's held-out predictions."""
 
     accuracy: float
-    precision: np.ndarray
-    recall: np.ndarray
-    f1: np.ndarray
+    precision: float
+    recall: float
+    f1: float
     confusion_matrix: np.ndarray
 
 
@@ -26,13 +26,12 @@ def evaluate_predictions(
         y_pred: Predicted class labels, shape ``(num_rows,)`` -- typically
             ``probabilities.argmax(axis=-1)`` for a probe fit with
             :class:`~nnact._probing._trainer.ProbeTrainer`.
-        labels: Class label order for ``precision``/``recall``/``f1``/
-            ``confusion_matrix``. Defaults to the sorted union of labels
-            seen in ``y_true`` and ``y_pred``.
+        labels: Class label order for ``confusion_matrix``. Defaults to the
+            sorted union of labels seen in ``y_true`` and ``y_pred``.
 
     Returns:
-        Per-class precision, recall, and F1, plus overall accuracy and the
-        confusion matrix.
+        Micro-averaged precision, recall, and F1, plus overall accuracy and
+        the confusion matrix.
     """
     from sklearn.metrics import (
         accuracy_score,
@@ -41,13 +40,13 @@ def evaluate_predictions(
     )
 
     precision, recall, f1, _ = precision_recall_fscore_support(
-        y_true, y_pred, labels=labels, zero_division=0
+        y_true, y_pred, labels=labels, average="micro", zero_division=0
     )
 
     return ProbeMetrics(
         accuracy=float(accuracy_score(y_true, y_pred)),
-        precision=precision,
-        recall=recall,
-        f1=f1,
+        precision=float(precision),
+        recall=float(recall),
+        f1=float(f1),
         confusion_matrix=confusion_matrix(y_true, y_pred, labels=labels),
     )

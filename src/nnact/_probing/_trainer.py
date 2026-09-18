@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, final
 
 import numpy as np
@@ -8,7 +9,7 @@ from nnact._logging import get_logger
 from nnact._outputs._dataset import ActivationDataset
 from nnact._outputs._utils import _assert_leading_shape
 from nnact._probing._config import ProbeConfig
-from nnact._probing._result import ProbeResult
+from nnact._probing._result import EvalResult, TrainResult
 
 logger = get_logger(__name__)
 
@@ -41,26 +42,60 @@ class ProbeTrainer:
 
     Example:
         >>> trainer = ProbeTrainer(ProbeConfig(C=0.5))
-        >>> result = trainer.fit(dataset, "model.layers.12")  # doctest: +SKIP
+        >>> result = trainer.train(dataset, "model.layers.12")  # doctest: +SKIP
     """
 
     def __init__(self, config: ProbeConfig) -> None:
         self._config = config
         self.estimator_: object | None = None
 
-    def fit(
+    def train(
         self,
         dataset: ActivationDataset,
         layer_name: str,
         *,
         filter_fn: FilterFn | None = None,
         pool_fn: PoolFn | None = None,
-    ) -> ProbeResult:
+    ) -> TrainResult:
         x, y, sample_of_row = self._select(
             dataset, layer_name, filter_fn=filter_fn, pool_fn=pool_fn
         )
         train_mask, test_mask = self._split(sample_of_row)
         return self._fit(x[train_mask], y[train_mask], x[test_mask], y[test_mask])
+
+    def evaluate(
+        self,
+        dataset: ActivationDataset,
+        layer_name: str,
+        *,
+        filter_fn: FilterFn | None = None,
+        pool_fn: PoolFn | None = None,
+    ) -> EvalResult:
+        """Score an already-fitted probe against fresh examples.
+
+        Unlike :meth:`train`, every selected row is scored -- there is no
+        train/test split, since the probe was already fitted elsewhere
+        (typically by an earlier :meth:`train` call on this same trainer).
+        """
+        assert self.estimator_ is not None, (
+            "no fitted estimator; call train() before evaluate()."
+        )
+
+        x, y, _sample_of_row = self._select(
+            dataset, layer_name, filter_fn=filter_fn, pool_fn=pool_fn
+        )
+        predictions, probabilities = self._predict(x)
+        return EvalResult(predictions=predictions, probabilities=probabilities, targets=y)
+
+    def load(self, path: str | Path) -> TrainResult:
+        """Restore the fitted estimator from a :class:`TrainResult` cached by
+        :meth:`~nnact._probing._pipeline.ProbePipeline.train`, so
+        :meth:`evaluate` can run against it without calling :meth:`train`
+        again first.
+        """
+        result = TrainResult.load(path)
+        self.estimator_ = result.estimator
+        return result
 
     def _select(
         self,
@@ -138,10 +173,14 @@ class ProbeTrainer:
         y_train: np.ndarray,
         x_test: np.ndarray,
         y_test: np.ndarray,
-    ) -> ProbeResult:
+    ) -> TrainResult:
         import cuml
         import cuml.pipeline
         import cupy
+
+        logger.info(
+            "Fitting probe: %d train rows, %d test rows", len(y_train), len(y_test)
+        )
 
         steps = []
         if self._config.add_scaling:
@@ -160,27 +199,24 @@ class ProbeTrainer:
 
         cupy_x_train = cupy.asarray(x_train)
         cupy_y_train = cupy.asarray(y_train)
-        cupy_x_test = cupy.asarray(x_test)
 
         estimator.fit(cupy_x_train, cupy_y_train)
         self.estimator_ = estimator
 
-        predictions = cupy.asnumpy(estimator.predict(cupy_x_test))
-        probabilities = cupy.asnumpy(estimator.predict_proba(cupy_x_test))
-        accuracy = float((predictions == y_test).mean())
-
-        logger.info(
-            "Fit probe: %d train rows, %d test rows, accuracy=%.4f",
-            len(y_train),
-            len(y_test),
-            accuracy,
-        )
-
-        return ProbeResult(
-            accuracy=accuracy,
+        predictions, probabilities = self._predict(x_test)
+        return TrainResult(
             predictions=predictions,
             probabilities=probabilities,
-            y_true=y_test,
-            num_train_rows=len(y_train),
-            num_test_rows=len(y_test),
+            targets=y_test,
+            estimator=estimator,
         )
+
+    def _predict(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        import cupy
+
+        estimator = self.estimator_
+        cupy_x = cupy.asarray(x)
+
+        predictions = cupy.asnumpy(estimator.predict(cupy_x))
+        probabilities = cupy.asnumpy(estimator.predict_proba(cupy_x))
+        return predictions, probabilities
