@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from typing import Protocol
 
@@ -83,94 +84,285 @@ class SequenceModelInput:
     position_ids: torch.Tensor | None = None
 
 
+def _stack_model_input(
+    model_inputs: list[SequenceModelInput],
+) -> SequenceModelInputBatch:
+    """Stack a list of :class:`SequenceModelInput` into one :class:`SequenceModelInputBatch`.
+
+    Args:
+        model_inputs: The per-sample model inputs to combine, in the order
+            they should appear in the batch.
+
+    Returns:
+        Every tensor field stacked along a new leading batch dimension. An
+        optional field (``token_type_ids``, ``position_ids``) is stacked
+        only when every sample in ``model_inputs`` has it; otherwise it's
+        ``None`` on the result.
+    """
+    return SequenceModelInputBatch(
+        input_ids=default_collate(
+            [model_input.input_ids for model_input in model_inputs]
+        ),
+        attention_mask=default_collate(
+            [model_input.attention_mask for model_input in model_inputs]
+        ),
+        token_type_ids=(
+            default_collate(
+                [model_input.token_type_ids for model_input in model_inputs]
+            )
+            if all(
+                model_input.token_type_ids is not None
+                for model_input in model_inputs
+            )
+            else None
+        ),
+        position_ids=(
+            default_collate(
+                [model_input.position_ids for model_input in model_inputs]
+            )
+            if all(
+                model_input.position_ids is not None for model_input in model_inputs
+            )
+            else None
+        ),
+    )
+
+
 @dataclass(frozen=True, kw_only=True)
 class ActivationSample:
-    """One dataset item: a model input, paired with its ground-truth labels.
+    """One dataset item: a model input, with no activation-step-specific concept attached.
 
     This is the type a dataset feeding
     :meth:`~nnact._pipeline.ActivationPipeline.run` must yield from
-    ``__getitem__``.
+    ``__getitem__`` -- in practice, always via one of its subclasses,
+    :class:`TokenActivationSample` or :class:`SequenceActivationSample`,
+    whichever matches the pipeline's ``output_type``.
 
     Attributes:
         model_input: The pre-tokenized example to run through the model.
-        activation_labels: One role/class name per token, for a
-            token-level run, or a single name for the whole sample, for a
-            sequence-level run. ``None`` if this run has no ground truth to
-            attach (e.g. plain activation extraction with nothing to
-            probe against). Never passed to the model itself -- see
-            :class:`SequenceModelInput`.
     """
 
     model_input: SequenceModelInput
-    activation_labels: list[str] | None = None
+
+
+def _assert_token_metadata_length(
+    metadata: dict[str, list] | None, num_tokens: int
+) -> None:
+    """Assert every value in ``metadata`` has exactly ``num_tokens`` entries.
+
+    Args:
+        metadata: A :class:`TokenActivationSample`'s ``metadata``, or
+            ``None`` to skip validation entirely.
+        num_tokens: The token count ``metadata``'s values must match --
+            that sample's own ``len(model_input.input_ids)``.
+
+    Raises:
+        ValueError: If any value's length doesn't equal ``num_tokens``.
+    """
+    if metadata is None:
+        return
+    mismatched = {
+        key: len(value) for key, value in metadata.items() if len(value) != num_tokens
+    }
+    if mismatched:
+        raise ValueError(
+            f"TokenActivationSample.metadata values must have one entry per "
+            f"token ({num_tokens}), got lengths {mismatched}."
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class TokenActivationSample(ActivationSample):
+    """An :class:`ActivationSample` for :class:`~nnact._steps._token.TokenActivationStep`.
+
+    Attributes:
+        metadata: Named per-token values a caller wants attached to this
+            sample -- ``nnact`` never interprets the keys or values, and
+            never passes them to the model itself (see
+            :class:`SequenceModelInput`). Each value must have one entry
+            per token in ``model_input`` -- it's masked the same way
+            ``token_ids``/``tokens`` are, with padding positions dropped.
+            ``None`` if this sample has no metadata to attach.
+    """
+
+    metadata: dict[str, list] | None = None
+
+    def __post_init__(self) -> None:
+        """Validate every ``metadata`` value has one entry per token.
+
+        Raises:
+            ValueError: If any value's length doesn't match
+                ``len(model_input.input_ids)``.
+        """
+        _assert_token_metadata_length(
+            metadata=self.metadata, num_tokens=len(self.model_input.input_ids)
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class SequenceActivationSample(ActivationSample):
+    """An :class:`ActivationSample` for :class:`~nnact._steps._sequence.SequenceActivationStep`.
+
+    Attributes:
+        metadata: Named values a caller wants attached to this sample --
+            ``nnact`` never interprets the keys or values, and never
+            passes them to the model itself (see :class:`SequenceModelInput`).
+            Unlike :class:`TokenActivationSample`, values are never
+            validated against a token count -- a sequence-level output has
+            no per-token rows to mask against, so any value is accepted as
+            a single, opaque value for this whole sample. ``None`` if this
+            sample has no metadata to attach.
+    """
+
+    metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class ActivationBatch:
-    """A batch of :class:`ActivationSample`, as an activation step consumes it.
+    """A batch of :class:`ActivationSample`, with no activation-step-specific concept attached.
+
+    In practice, always one of its subclasses, :class:`TokenActivationBatch`
+    or :class:`SequenceActivationBatch`, whichever an activation step
+    actually consumes.
 
     Attributes:
         model_input: The batch's model inputs, ready for
             ``model(**model_input.as_model_kwargs())``.
-        activation_labels: One entry per sample, in batch order, each the
-            same shape as that sample's own ``activation_labels``. Kept as
-            a plain list rather than stacked into an array, since it holds
-            strings -- ``None`` unless every sample in the batch has labels.
     """
 
     model_input: SequenceModelInputBatch
-    activation_labels: list[list[str]] | None = None
+
+
+def _collate_metadata(samples: Sequence[ActivationSample]) -> dict[str, list] | None:
+    """Collect each sample's own ``metadata`` dict into one per-key list.
+
+    Args:
+        samples: The samples being batched, each optionally a
+            :class:`TokenActivationSample` or :class:`SequenceActivationSample`
+            with its own ``metadata``.
+
+    Returns:
+        One list per key, each list's ``i``-th entry being sample ``i``'s
+        own value for that key -- or ``None`` if no sample has any
+        metadata. A key is included only when every sample has it.
+
+    Raises:
+        ValueError: If ``metadata`` keys aren't identical across every
+            sample that has any metadata at all -- a key present on some
+            samples but not others usually means a bug in the caller's
+            dataset, not an intentionally sparse field.
+    """
+    sample_metadatas = [getattr(sample, "metadata", None) or {} for sample in samples]
+    metadata_key_sets = {frozenset(m) for m in sample_metadatas}
+    if len(metadata_key_sets) > 1:
+        raise ValueError(
+            f"Samples in this batch disagree on which metadata keys are "
+            f"present: {sorted(metadata_key_sets, key=sorted)}."
+        )
+    metadata_keys = next(iter(metadata_key_sets), frozenset())
+    if not metadata_keys:
+        return None
+    return {key: [m[key] for m in sample_metadatas] for key in metadata_keys}
+
+
+def _assert_consistent_metadata_lengths(metadata: dict[str, list] | None) -> None:
+    """Assert every sample's list for a key is the same length as every other's.
+
+    Called after :func:`_collate_metadata` has already confirmed every
+    sample shares the same metadata keys -- this additionally requires
+    those per-sample lists to agree on length within each key, since a
+    :class:`TokenActivationBatch`'s ``model_input`` is itself collated to a
+    single, uniform ``sequence_length`` and its ``metadata`` must line up
+    with it the same way.
+
+    Args:
+        metadata: A :class:`TokenActivationBatch`'s collated ``metadata``,
+            or ``None`` to skip validation entirely.
+
+    Raises:
+        ValueError: If any key's per-sample lists aren't all the same length.
+    """
+    if metadata is None:
+        return
+    for key, per_sample_values in metadata.items():
+        lengths = {len(value) for value in per_sample_values}
+        if len(lengths) > 1:
+            raise ValueError(
+                f"TokenActivationBatch.metadata[{key!r}] has samples of "
+                f"differing lengths: {sorted(lengths)}."
+            )
+
+
+@dataclass(frozen=True, kw_only=True)
+class TokenActivationBatch(ActivationBatch):
+    """An :class:`ActivationBatch` for :class:`~nnact._steps._token.TokenActivationStep`.
+
+    Attributes:
+        metadata: One list per key, each list's ``i``-th entry being sample
+            ``i``'s own per-token list for that key. Kept as plain nested
+            lists rather than stacked into an array here -- the step
+            converts each list to an array itself.
+    """
+
+    metadata: dict[str, list] | None = None
 
     @classmethod
-    def from_samples(cls, samples: list[ActivationSample]) -> ActivationBatch:
-        """Stack a list of :class:`ActivationSample` into one batch.
+    def from_samples(cls, samples: list[TokenActivationSample]) -> TokenActivationBatch:
+        """Stack a list of :class:`TokenActivationSample` into one batch.
 
         Args:
             samples: The samples to combine, in the order they should
-                appear in the batch. All must share the same fields set
-                (e.g. all have ``token_type_ids`` or none do) -- an
-                optional field is included in the result only when every
-                sample in ``samples`` has it.
+                appear in the batch.
 
         Returns:
-            One :class:`ActivationBatch` with each tensor field stacked
-            along a new leading batch dimension, and ``activation_labels``
-            collected into a plain list (not stacked, since it holds
-            strings).
+            One :class:`TokenActivationBatch` with ``model_input`` stacked
+            and ``metadata`` collected per key (see
+            :func:`_collate_metadata`).
+
+        Raises:
+            ValueError: If, for any metadata key, samples disagree on that
+                key's per-token list length (see
+                :func:`_assert_consistent_metadata_lengths`).
         """
-        model_inputs = [sample.model_input for sample in samples]
+        metadata = _collate_metadata(samples)
+        _assert_consistent_metadata_lengths(metadata=metadata)
         return cls(
-            model_input=SequenceModelInputBatch(
-                input_ids=default_collate(
-                    [model_input.input_ids for model_input in model_inputs]
-                ),
-                attention_mask=default_collate(
-                    [model_input.attention_mask for model_input in model_inputs]
-                ),
-                token_type_ids=(
-                    default_collate(
-                        [model_input.token_type_ids for model_input in model_inputs]
-                    )
-                    if all(
-                        model_input.token_type_ids is not None
-                        for model_input in model_inputs
-                    )
-                    else None
-                ),
-                position_ids=(
-                    default_collate(
-                        [model_input.position_ids for model_input in model_inputs]
-                    )
-                    if all(
-                        model_input.position_ids is not None
-                        for model_input in model_inputs
-                    )
-                    else None
-                ),
+            model_input=_stack_model_input(
+                [sample.model_input for sample in samples]
             ),
-            activation_labels=(
-                [sample.activation_labels for sample in samples]
-                if all(sample.activation_labels is not None for sample in samples)
-                else None
+            metadata=metadata,
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class SequenceActivationBatch(ActivationBatch):
+    """An :class:`ActivationBatch` for :class:`~nnact._steps._sequence.SequenceActivationStep`.
+
+    Attributes:
+        metadata: One list per key, each list's ``i``-th entry being sample
+            ``i``'s own scalar value for that key.
+    """
+
+    metadata: dict[str, list] | None = None
+
+    @classmethod
+    def from_samples(
+        cls, samples: list[SequenceActivationSample]
+    ) -> SequenceActivationBatch:
+        """Stack a list of :class:`SequenceActivationSample` into one batch.
+
+        Args:
+            samples: The samples to combine, in the order they should
+                appear in the batch.
+
+        Returns:
+            One :class:`SequenceActivationBatch` with ``model_input``
+            stacked and ``metadata`` collected per key (see
+            :func:`_collate_metadata`).
+        """
+        return cls(
+            model_input=_stack_model_input(
+                [sample.model_input for sample in samples]
             ),
+            metadata=_collate_metadata(samples),
         )

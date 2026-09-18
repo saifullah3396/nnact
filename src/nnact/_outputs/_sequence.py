@@ -22,17 +22,17 @@ class SequenceActivationOutput:
         prediction: The model's own argmax prediction per sample, per
             position, shape ``(batch_size, sequence_length)``.
         top_probability: Softmax probability of ``prediction``, same shape.
-        loss: The model's own loss for this batch, if it computed one.
-        labels: Ground-truth label per sample, shape ``(batch_size,)`` --
-            distinct from ``prediction``, which is the model's own guess.
+        metadata: Named per-sample values a caller attached to the batch's
+            samples (see :class:`~nnact._outputs._protocols.SequenceActivationSample`),
+            each shaped ``(batch_size,)`` -- one value per sample, never
+            masked. ``nnact`` never interprets the keys or values.
         activations: Captured layer outputs, keyed by layer name, each
             shaped ``(batch_size, sequence_length, *feature)``.
     """
 
     prediction: np.ndarray
     top_probability: np.ndarray
-    loss: np.ndarray | None = None
-    labels: np.ndarray | None = None
+    metadata: dict[str, np.ndarray] | None = None
     activations: dict[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -40,8 +40,8 @@ class SequenceActivationOutput:
 
         Raises:
             AssertionError: If any field's shape doesn't match
-                ``(batch_size, sequence_length)`` (or, for ``labels``, just
-                ``(batch_size,)``).
+                ``(batch_size, sequence_length)`` (or, for a metadata
+                value, just ``(batch_size,)``).
         """
         _assert_shape(name="prediction", tensor=self.prediction, shape=(None, None))
 
@@ -52,10 +52,12 @@ class SequenceActivationOutput:
             tensor=self.top_probability,
             shape=(batch_size, sequence_length),
         )
-        _assert_shape(
-            name="loss", tensor=self.loss, shape=(batch_size, sequence_length)
-        )
-        _assert_shape(name="labels", tensor=self.labels, shape=(batch_size,))
+
+        if self.metadata is not None:
+            for key, value in self.metadata.items():
+                _assert_shape(
+                    name=f"metadata[{key!r}]", tensor=value, shape=(batch_size,)
+                )
 
         for name, tensor in self.activations.items():
             _assert_leading_shape(

@@ -90,18 +90,16 @@ class InMemorySequenceActivationDataset(ActivationDataset):
     def __init__(self) -> None:
         self._predictions: list[np.ndarray] = []
         self._top_probabilities: list[np.ndarray] = []
-        self._losses: list[np.ndarray] = []
-        self._labels: list[np.ndarray] = []
+        self._metadata: dict[str, list[np.ndarray]] = {}
         self._activations: dict[str, list[np.ndarray]] = {}
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
         """Append one batch's fields to this dataset's accumulated lists."""
         self._predictions.append(output.prediction)
         self._top_probabilities.append(output.top_probability)
-        if output.loss is not None:
-            self._losses.append(output.loss)
-        if output.labels is not None:
-            self._labels.append(output.labels)
+        if output.metadata is not None:
+            for key, value in output.metadata.items():
+                self._metadata.setdefault(key, []).append(value)
         for name, tensor in output.activations.items():
             self._activations.setdefault(name, []).append(tensor)
 
@@ -121,14 +119,14 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         return np.concatenate(self._top_probabilities, axis=0)
 
     @property
-    def loss(self) -> np.ndarray | None:
-        """Per-sample loss, or ``None`` if no batch ever provided one."""
-        return np.concatenate(self._losses, axis=0) if self._losses else None
-
-    @property
-    def labels(self) -> np.ndarray | None:
-        """Ground-truth label per sample, or ``None`` if none were provided."""
-        return np.concatenate(self._labels, axis=0) if self._labels else None
+    def metadata(self) -> dict[str, np.ndarray] | None:
+        """Caller-attached per-sample metadata, or ``None`` if none were provided."""
+        if not self._metadata:
+            return None
+        return {
+            key: np.concatenate(values, axis=0)
+            for key, values in self._metadata.items()
+        }
 
     @property
     @override
@@ -156,8 +154,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         self._offsets: list[np.ndarray] = [np.zeros(1, dtype=np.int64)]
         self._predictions: list[np.ndarray] = []
         self._top_probabilities: list[np.ndarray] = []
-        self._losses: list[np.ndarray] = []
-        self._labels: list[np.ndarray] = []
+        self._metadata: dict[str, list[np.ndarray]] = {}
         self._activations: dict[str, list[np.ndarray]] = {}
         self._token_ids: list[np.ndarray] = []
         self._tokens: list[np.ndarray] = []
@@ -168,10 +165,9 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         self._offsets.append(output.offsets[1:] + base)
         self._predictions.append(output.prediction)
         self._top_probabilities.append(output.top_probability)
-        if output.loss is not None:
-            self._losses.append(output.loss)
-        if output.labels is not None:
-            self._labels.append(output.labels)
+        if output.metadata is not None:
+            for key, value in output.metadata.items():
+                self._metadata.setdefault(key, []).append(value)
         for name, tensor in output.activations.items():
             self._activations.setdefault(name, []).append(tensor)
         if output.token_ids is not None:
@@ -200,14 +196,14 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         return np.concatenate(self._top_probabilities, axis=0)
 
     @property
-    def loss(self) -> np.ndarray | None:
-        """Per-token loss, or ``None`` if no batch ever provided one."""
-        return np.concatenate(self._losses, axis=0) if self._losses else None
-
-    @property
-    def labels(self) -> np.ndarray | None:
-        """Ground-truth label per real token, or ``None`` if none were provided."""
-        return np.concatenate(self._labels, axis=0) if self._labels else None
+    def metadata(self) -> dict[str, np.ndarray] | None:
+        """Caller-attached per-token metadata, or ``None`` if none were provided."""
+        if not self._metadata:
+            return None
+        return {
+            key: np.concatenate(values, axis=0)
+            for key, values in self._metadata.items()
+        }
 
     @property
     @override

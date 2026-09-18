@@ -15,7 +15,11 @@ from transformers import PreTrainedTokenizerBase
 from nnact._logging import get_logger
 from nnact._model._hooked import HookedModel
 from nnact._outputs._dataset import ActivationDataset
-from nnact._outputs._protocols import ActivationBatch, ActivationSample
+from nnact._outputs._protocols import (
+    ActivationSample,
+    SequenceActivationBatch,
+    TokenActivationBatch,
+)
 from nnact._steps._accumulator import (
     H5SequenceActivationAccumulator,
     H5TokenActivationAccumulator,
@@ -29,25 +33,38 @@ logger = get_logger(name=__name__)
 CACHE_FILE_NAME = "activations.h5"
 
 
-def activation_loader(dataset: Dataset[ActivationSample], *, batch_size: int) -> DataLoader:
+def activation_loader(
+    dataset: Dataset[ActivationSample],
+    *,
+    output_type: Literal["sequence", "token"],
+    batch_size: int,
+) -> DataLoader:
     """Build ordered batches from a dataset yielding ``ActivationSample`` items.
 
     Args:
-        dataset: A dataset whose ``__getitem__`` returns ``ActivationSample``
+        dataset: A dataset whose ``__getitem__`` returns
+            ``TokenActivationSample`` (for ``output_type="token"``) or
+            ``SequenceActivationSample`` (for ``output_type="sequence"``)
             instances -- typically the same dataset passed to
             :meth:`ActivationPipeline.run`.
+        output_type: Selects which sample type's ``from_samples`` collates
+            each batch -- must match ``dataset``'s own item type.
         batch_size: Number of samples per batch.
 
     Returns:
         A ``DataLoader`` that never shuffles (activation order must match
-        the input dataset's order) and collates samples via
-        :meth:`~nnact._outputs._protocols.ActivationBatch.from_samples`.
+        the input dataset's order).
     """
+    collate_fn = (
+        TokenActivationBatch.from_samples
+        if output_type == "token"
+        else SequenceActivationBatch.from_samples
+    )
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=ActivationBatch.from_samples,
+        collate_fn=collate_fn,
     )
 
 
@@ -273,7 +290,9 @@ class ActivationPipeline:
             self._output_type,
         )
 
-        loader = activation_loader(dataset=dataset, batch_size=batch_size)
+        loader = activation_loader(
+            dataset=dataset, output_type=self._output_type, batch_size=batch_size
+        )
         _, timer = self._runner.run(loader=loader)
         result = self._accumulator.dataset
 

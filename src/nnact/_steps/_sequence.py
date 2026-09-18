@@ -4,8 +4,8 @@ import numpy as np
 import torch
 from ignite.engine import Engine
 
-from nnact._model._hooked import HookedModel, tensor_to_numpy
-from nnact._outputs._protocols import ActivationBatch, ModelOutput
+from nnact._model._hooked import HookedModel
+from nnact._outputs._protocols import ModelOutput, SequenceActivationBatch
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._steps._utils import _move_tensors, _top_prediction
 
@@ -54,7 +54,7 @@ class SequenceActivationStep:
     def __call__(
         self,
         engine: Engine,
-        batch: ActivationBatch,
+        batch: SequenceActivationBatch,
     ) -> SequenceActivationOutput:
         """Run one batch through the model and capture its activations.
 
@@ -66,14 +66,14 @@ class SequenceActivationStep:
 
         Returns:
             One row per sample in ``batch``, holding the model's own
-            prediction, top softmax probability, optional loss and
-            ground-truth labels, and the captured layers' activations.
+            prediction, top softmax probability, any caller-attached
+            metadata, and the captured layers' activations.
 
         Raises:
-            AssertionError: If ``batch`` is not an ``ActivationBatch``.
+            AssertionError: If ``batch`` is not a ``SequenceActivationBatch``.
         """
-        assert isinstance(batch, ActivationBatch), (
-            "batch passed to the generator must be an ActivationBatch."
+        assert isinstance(batch, SequenceActivationBatch), (
+            "batch passed to the generator must be a SequenceActivationBatch."
         )
 
         if self._device is not None:
@@ -94,14 +94,9 @@ class SequenceActivationStep:
         return SequenceActivationOutput(
             prediction=prediction,
             top_probability=top_probability,
-            loss=(
-                tensor_to_numpy(tensor=raw_output.loss)
-                if raw_output.loss is not None
-                else None
-            ),
-            labels=(
-                np.asarray(batch.activation_labels)
-                if batch.activation_labels is not None
+            metadata=(
+                {key: np.asarray(value) for key, value in batch.metadata.items()}
+                if batch.metadata is not None
                 else None
             ),
             activations=activations,

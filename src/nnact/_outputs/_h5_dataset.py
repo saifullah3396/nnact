@@ -12,13 +12,44 @@ from nnact._outputs._token import TokenActivationOutput
 
 PREDICTION_KEY = "prediction"
 TOP_PROBABILITY_KEY = "top_probability"
-LOSS_KEY = "loss"
-LABELS_KEY = "labels"
 TOKEN_IDS_KEY = "token_ids"
 TOKENS_KEY = "tokens"
 OFFSETS_KEY = "offsets"
 LAYERS_GROUP = "activations"
+METADATA_GROUP = "metadata"
 STR_DTYPE = h5py.string_dtype(encoding="utf-8")
+
+
+def _h5_dtype_for(values: np.ndarray) -> object:
+    """The h5py dtype to store ``values`` under -- ``STR_DTYPE`` for strings, else as-is.
+
+    Args:
+        values: The array about to be written -- ``nnact`` never interprets
+            what a metadata value means, only whether it needs h5py's
+            string type to be stored correctly.
+
+    Returns:
+        ``STR_DTYPE`` if ``values`` holds strings, otherwise ``values.dtype``.
+    """
+    return STR_DTYPE if values.dtype.kind in "OU" else values.dtype
+
+
+def _read_string_dataset(file: h5py.File, key: str) -> np.ndarray | None:
+    """Read a dataset written with ``STR_DTYPE``, decoding bytes back to ``str``.
+
+    Args:
+        file: The open HDF5 file to read from.
+        key: Dataset path within ``file``.
+
+    Returns:
+        The dataset's contents as a plain string array, or ``None`` if
+        ``key`` isn't present.
+    """
+    if key not in file:
+        return None
+    return np.asarray(
+        [s.decode() if isinstance(s, bytes) else s for s in file[key].asstr()[...]]
+    )
 
 
 class _H5ActivationDataset(ActivationDataset):
@@ -104,6 +135,40 @@ class _H5ActivationDataset(ActivationDataset):
                 dtype=np.float32,
             )
 
+    def _append_metadata(
+        self, file: h5py.File, metadata: dict[str, np.ndarray]
+    ) -> None:
+        """Append every key's values under ``metadata/{key}``.
+
+        Args:
+            file: The open HDF5 file to write into.
+            metadata: This batch's caller-attached metadata, keyed by name
+                -- ``nnact`` never interprets the keys or values.
+        """
+        for key, values in metadata.items():
+            self._append_dataset(
+                file=file,
+                key=f"{METADATA_GROUP}/{key}",
+                values=values,
+                dtype=_h5_dtype_for(values=values),
+            )
+
+    @property
+    def metadata(self) -> dict[str, np.ndarray] | None:
+        """Caller-attached metadata, keyed by name, or ``None`` if none were provided."""
+        with h5py.File(self._path, "r") as file:
+            group = file.get(METADATA_GROUP)
+            if group is None:
+                return None
+            return {
+                key: (
+                    _read_string_dataset(file=file, key=f"{METADATA_GROUP}/{key}")
+                    if ds.dtype.kind == "O"
+                    else np.asarray(ds[...])
+                )
+                for key, ds in group.items()
+            }
+
     def _read_dataset(self, key: str) -> np.ndarray | None:
         """Read the full contents of the dataset at ``key``, or ``None`` if absent."""
         with h5py.File(self._path, "r") as file:
@@ -163,18 +228,8 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
                 dtype=np.float32,
             )
 
-            if output.loss is not None:
-                self._append_dataset(
-                    file=file,
-                    key=LOSS_KEY,
-                    values=output.loss.astype(np.float32, copy=False),
-                    dtype=np.float32,
-                )
-
-            if output.labels is not None:
-                self._append_dataset(
-                    file=file, key=LABELS_KEY, values=output.labels, dtype=STR_DTYPE
-                )
+            if output.metadata is not None:
+                self._append_metadata(file=file, metadata=output.metadata)
 
             self._append_activations(file=file, activations=output.activations)
 
@@ -196,24 +251,6 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
         top_probability = self._read_dataset(key=TOP_PROBABILITY_KEY)
         assert top_probability is not None, "No batches written yet."
         return top_probability
-
-    @property
-    def loss(self) -> np.ndarray | None:
-        """Per-sample loss, or ``None`` if no batch ever provided one."""
-        return self._read_dataset(key=LOSS_KEY)
-
-    @property
-    def labels(self) -> np.ndarray | None:
-        """Ground-truth label per sample, or ``None`` if none were provided."""
-        with h5py.File(self._path, "r") as file:
-            if LABELS_KEY not in file:
-                return None
-            return np.asarray(
-                [
-                    s.decode() if isinstance(s, bytes) else s
-                    for s in file[LABELS_KEY].asstr()[...]
-                ]
-            )
 
 
 @final
@@ -241,18 +278,8 @@ class H5TokenActivationDataset(_H5ActivationDataset):
                 dtype=np.float32,
             )
 
-            if output.loss is not None:
-                self._append_dataset(
-                    file=file,
-                    key=LOSS_KEY,
-                    values=output.loss.astype(np.float32, copy=False),
-                    dtype=np.float32,
-                )
-
-            if output.labels is not None:
-                self._append_dataset(
-                    file=file, key=LABELS_KEY, values=output.labels, dtype=STR_DTYPE
-                )
+            if output.metadata is not None:
+                self._append_metadata(file=file, metadata=output.metadata)
 
             if output.token_ids is not None:
                 self._append_dataset(
@@ -308,24 +335,6 @@ class H5TokenActivationDataset(_H5ActivationDataset):
         return top_probability
 
     @property
-    def loss(self) -> np.ndarray | None:
-        """Per-token loss, or ``None`` if no batch ever provided one."""
-        return self._read_dataset(key=LOSS_KEY)
-
-    @property
-    def labels(self) -> np.ndarray | None:
-        """Ground-truth label per real token, or ``None`` if none were provided."""
-        with h5py.File(self._path, "r") as file:
-            if LABELS_KEY not in file:
-                return None
-            return np.asarray(
-                [
-                    s.decode() if isinstance(s, bytes) else s
-                    for s in file[LABELS_KEY].asstr()[...]
-                ]
-            )
-
-    @property
     def token_ids(self) -> np.ndarray | None:
         """Input token id per real token, or ``None`` if none were provided."""
         return self._read_dataset(key=TOKEN_IDS_KEY)
@@ -363,9 +372,9 @@ class H5TokenActivationDataset(_H5ActivationDataset):
             columns ``sample`` (which accumulated sample the token belongs
             to), ``token_id`` and ``token`` (present only when a tokenizer was
             given to the pipeline), ``predicted_id`` (the model's own argmax
-            prediction for that token), ``predicted_probability``, ``label``,
-            and one ``{layer}_norm`` column per layer holding that token's
-            activation L2 norm.
+            prediction for that token), ``predicted_probability``, one column
+            per caller-attached metadata key, and one ``{layer}_norm`` column
+            per layer holding that token's activation L2 norm.
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
@@ -386,7 +395,11 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
         columns["predicted_id"] = self.prediction.tolist()
         columns["predicted_probability"] = self.top_probability.tolist()
-        columns["label"] = self.labels.tolist()
+
+        metadata = self.metadata
+        if metadata is not None:
+            for key, values in metadata.items():
+                columns[key] = values.tolist()
 
         for name, tensor in self.activations.items():
             columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()

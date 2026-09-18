@@ -4,10 +4,10 @@ from typing import Any
 
 from torch.utils.data import Dataset
 
-from nnact._outputs._protocols import ActivationSample, SequenceModelInput
+from nnact._outputs._protocols import SequenceModelInput, TokenActivationSample
 
 
-class WikiTextSamples(Dataset[ActivationSample]):
+class WikiTextSamples(Dataset[TokenActivationSample]):
     """WikiText passages tokenized to fixed-length model inputs."""
 
     def __init__(self, tokenizer: Any, n: int = 256, max_length: int = 64) -> None:
@@ -30,8 +30,8 @@ class WikiTextSamples(Dataset[ActivationSample]):
     def __len__(self) -> int:
         return len(self.texts)
 
-    def __getitem__(self, idx: int) -> ActivationSample:
-        return ActivationSample(
+    def __getitem__(self, idx: int) -> TokenActivationSample:
+        return TokenActivationSample(
             model_input=SequenceModelInput(
                 input_ids=self.encoded["input_ids"][idx],
                 attention_mask=self.encoded["attention_mask"][idx],

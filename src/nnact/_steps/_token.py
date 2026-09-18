@@ -6,7 +6,7 @@ from ignite.engine import Engine
 from transformers import PreTrainedTokenizerBase
 
 from nnact._model._hooked import HookedModel, tensor_to_numpy
-from nnact._outputs._protocols import ActivationBatch, ModelOutput
+from nnact._outputs._protocols import ModelOutput, TokenActivationBatch
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
 from nnact._steps._utils import _move_tensors, _top_prediction
@@ -62,7 +62,7 @@ class TokenActivationStep:
     def __call__(
         self,
         engine: Engine,
-        batch: ActivationBatch,
+        batch: TokenActivationBatch,
     ) -> TokenActivationOutput:
         """Run one batch through the model and capture its per-token activations.
 
@@ -75,15 +75,15 @@ class TokenActivationStep:
         Returns:
             One row per real (non-padding) token across every sample in
             ``batch``, holding the model's own prediction, top softmax
-            probability, optional loss and ground-truth labels, the
-            captured layers' activations, and -- when this step was built
-            with a tokenizer -- the decoded token string.
+            probability, any caller-attached metadata, the captured layers'
+            activations, and -- when this step was built with a tokenizer --
+            the decoded token string.
 
         Raises:
-            AssertionError: If ``batch`` is not an ``ActivationBatch``.
+            AssertionError: If ``batch`` is not a ``TokenActivationBatch``.
         """
-        assert isinstance(batch, ActivationBatch), (
-            "batch passed to the generator must be an ActivationBatch."
+        assert isinstance(batch, TokenActivationBatch), (
+            "batch passed to the generator must be a TokenActivationBatch."
         )
 
         if self._device is not None:
@@ -107,11 +107,6 @@ class TokenActivationStep:
         sequence_output = SequenceActivationOutput(
             prediction=prediction,
             top_probability=top_probability,
-            loss=(
-                tensor_to_numpy(tensor=raw_output.loss)
-                if raw_output.loss is not None
-                else None
-            ),
             activations=activations,
         )
 
@@ -125,9 +120,9 @@ class TokenActivationStep:
         return TokenActivationOutput.from_sequence(
             output=sequence_output,
             mask=tensor_to_numpy(tensor=attention_mask),
-            labels=(
-                np.asarray(batch.activation_labels)
-                if batch.activation_labels is not None
+            metadata=(
+                {key: np.asarray(value) for key, value in batch.metadata.items()}
+                if batch.metadata is not None
                 else None
             ),
             token_ids=tensor_to_numpy(tensor=token_ids),
