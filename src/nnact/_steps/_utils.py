@@ -1,3 +1,4 @@
+import dataclasses
 from collections.abc import Mapping
 from typing import Any
 
@@ -25,6 +26,16 @@ def _move_tensors(value: Any, device: torch.device | str) -> Any:
     """Move tensor leaves while preserving the caller's batch structure."""
     if isinstance(value, torch.Tensor):
         return value.to(device)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.replace(
+            value,
+            **{
+                field.name: _move_tensors(
+                    getattr(value, field.name), device
+                )
+                for field in dataclasses.fields(value)
+            },
+        )
     if isinstance(value, Mapping):
         return {key: _move_tensors(item, device) for key, item in value.items()}
     if isinstance(value, tuple):

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
-
 import numpy as np
 import torch
 from ignite.engine import Engine
 from transformers import PreTrainedTokenizerBase
 
 from nnact._model._hooked import HookedModel, tensor_to_numpy
-from nnact._outputs._protocols import ModelOutput
+from nnact._outputs._protocols import ActivationBatch, ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._outputs._token import TokenActivationOutput
 from nnact._steps._utils import _move_tensors, _top_prediction
@@ -36,27 +33,22 @@ class TokenActivationStep:
     def __call__(
         self,
         engine: Engine,
-        batch: Mapping[str, Any],
+        batch: ActivationBatch,
     ) -> TokenActivationOutput:
-        assert isinstance(batch, Mapping), (
-            "batch passed to the generator must be a mapping."
+        assert isinstance(batch, ActivationBatch), (
+            "batch passed to the generator must be an ActivationBatch."
         )
 
         if self._device is not None:
             batch = _move_tensors(batch, self._device)
 
-        assert "input_ids" in batch, "batch must contain an input_ids"
-        assert "attention_mask" in batch, "batch must contain an attention_mask"
-        token_ids = batch["input_ids"]
-        attention_mask = batch["attention_mask"]
-        assert isinstance(token_ids, torch.Tensor), "token_ids must be a torch.Tensor"
-        assert isinstance(attention_mask, torch.Tensor), (
-            "attention_mask must be a torch.Tensor"
-        )
+        token_ids = batch.model_input.input_ids
+        attention_mask = batch.model_input.attention_mask
 
-        model_inputs = {key: value for key, value in batch.items() if key != "labels"}
         with self._hooked_model.capture(self._layer_names):
-            raw_output: ModelOutput = self._hooked_model(**model_inputs)
+            raw_output: ModelOutput = self._hooked_model(
+                **batch.model_input.as_model_kwargs()
+            )
 
             activations = {
                 name: self._hooked_model.get_activation(name)
@@ -83,11 +75,14 @@ class TokenActivationStep:
             ]
             assert isinstance(tokens, list), f"List[str] expected, got {type(tokens)}"
 
-        labels = batch.get("labels")
         return TokenActivationOutput.from_sequence(
             sequence_output,
             mask=tensor_to_numpy(attention_mask),
-            labels=tensor_to_numpy(labels) if labels is not None else None,
+            labels=(
+                tensor_to_numpy(batch.activation_labels)
+                if batch.activation_labels is not None
+                else None
+            ),
             token_ids=tensor_to_numpy(token_ids),
             tokens=np.asarray(tokens) if tokens is not None else None,
         )

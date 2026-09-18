@@ -3,18 +3,19 @@ from __future__ import annotations
 import json
 import platform
 import socket
-from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, final
+from typing import Literal, final
 
 import torch
 from torch import nn
+from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizerBase
 
 from nnact._logging import enable_file_logging, get_logger
 from nnact._model._hooked import HookedModel
 from nnact._outputs._dataset import ActivationDataset
+from nnact._outputs._protocols import ActivationBatch, ActivationSample
 from nnact._steps._accumulator import (
     H5SequenceActivationAccumulator,
     H5TokenActivationAccumulator,
@@ -28,6 +29,16 @@ logger = get_logger(__name__)
 RUN_LOG_NAME = "run.log"
 RUN_METADATA_NAME = "run_metadata.json"
 CACHE_FILE_NAME = "activations.h5"
+
+
+def activation_loader(dataset: Dataset[ActivationSample], *, batch_size: int) -> DataLoader:
+    """Build ordered batches from a dataset yielding ``ActivationSample`` items."""
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=ActivationBatch.from_samples,
+    )
 
 
 @final
@@ -116,7 +127,7 @@ class ActivationPipeline:
             log_progress_to_file=True,
         )
 
-    def run(self, loader: Iterable[Mapping[str, Any]]) -> ActivationDataset:
+    def run(self, dataset: Dataset[ActivationSample], *, batch_size: int) -> ActivationDataset:
         if self._accumulator.dataset.exists():
             return self._accumulator.dataset
 
@@ -127,20 +138,21 @@ class ActivationPipeline:
             self._output_type,
         )
 
+        loader = activation_loader(dataset, batch_size=batch_size)
         _, timer = self._runner.run(loader)
-        dataset = self._accumulator.dataset
+        result = self._accumulator.dataset
 
         finished_at = datetime.now(UTC)
-        logger.info("Run finished: %d samples in %.2fs", len(dataset), timer.value())
+        logger.info("Run finished: %d samples in %.2fs", len(result), timer.value())
 
         self._write_run_metadata(
             started_at=started_at,
             finished_at=finished_at,
             duration_seconds=timer.value(),
-            num_samples=len(dataset),
+            num_samples=len(result),
         )
 
-        return dataset
+        return result
 
     def _write_run_metadata(
         self,

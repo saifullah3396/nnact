@@ -14,3 +14,4 @@ runs/
 /01_train_role_probes.py
 /fake_dataset.jsonl
 /probe_trianer.py
+old_runs/

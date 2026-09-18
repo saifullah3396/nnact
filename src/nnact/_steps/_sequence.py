@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
-
 import torch
 from ignite.engine import Engine
 
-from nnact._model._hooked import HookedModel
-from nnact._outputs._protocols import ModelOutput
+from nnact._model._hooked import HookedModel, tensor_to_numpy
+from nnact._outputs._protocols import ActivationBatch, ModelOutput
 from nnact._outputs._sequence import SequenceActivationOutput
 from nnact._steps._utils import _move_tensors, _top_prediction
 
@@ -31,17 +28,19 @@ class SequenceActivationStep:
     def __call__(
         self,
         engine: Engine,
-        batch: Mapping[str, Any],
+        batch: ActivationBatch,
     ) -> SequenceActivationOutput:
-        assert isinstance(batch, Mapping), (
-            "batch passed to the generator must be a mapping."
+        assert isinstance(batch, ActivationBatch), (
+            "batch passed to the generator must be an ActivationBatch."
         )
 
         if self._device is not None:
             batch = _move_tensors(batch, self._device)
 
         with self._hooked_model.capture(self._layer_names):
-            raw_output: ModelOutput = self._hooked_model(**batch)
+            raw_output: ModelOutput = self._hooked_model(
+                **batch.model_input.as_model_kwargs()
+            )
 
             activations = {
                 name: self._hooked_model.get_activation(name)
@@ -50,15 +49,18 @@ class SequenceActivationStep:
 
         prediction, top_probability = _top_prediction(raw_output.logits)
 
-        labels = batch.get("labels")
         return SequenceActivationOutput(
             prediction=prediction,
             top_probability=top_probability,
             loss=(
-                raw_output.loss.detach().cpu().numpy()
+                tensor_to_numpy(raw_output.loss)
                 if raw_output.loss is not None
                 else None
             ),
-            labels=labels.detach().cpu().numpy() if labels is not None else None,
+            labels=(
+                tensor_to_numpy(batch.activation_labels)
+                if batch.activation_labels is not None
+                else None
+            ),
             activations=activations,
         )

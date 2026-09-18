@@ -14,7 +14,6 @@ import json
 import random
 import sys
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
@@ -24,8 +23,8 @@ import torch
 from torch.utils.data import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from examples._utils.data import activation_loader
 from nnact import ActivationPipeline, ProbeConfig, ProbePipeline, ProbeTrainer
+from nnact._outputs._protocols import ActivationSample, SequenceModelInput
 from nnact._probing._trainer import FilterFn
 
 MODEL = "Qwen/Qwen3-1.7B"
@@ -34,7 +33,7 @@ ROLES = ["user", "assistant", "system", "tool", "cot"]
 ROLE_TO_ID = {role: index for index, role in enumerate(ROLES)}
 NO_ROLE_LABEL = -1
 LAYERS_TO_PROBE = 16
-NUM_SAMPLES = None  # cap for a quick test run, e.g. 100; None uses the full dataset
+NUM_SAMPLES = 40  # cap for a quick test run, e.g. 100; None uses the full dataset
 SAMPLE_SEED = 0
 PROBE_CACHE_DIR = Path("runs") / "01_train_role_probes" / "probes"
 # Reference's TensorProbeTrainerConfig.skip_first_n for nested_reasoning=True --
@@ -51,7 +50,7 @@ ROLE_COMBINATIONS = [
 ]
 
 
-class RoleConversationSamples(Dataset[dict[str, Any]]):
+class RoleConversationSamples(Dataset[ActivationSample]):
     """Pre-tokenized fake conversations with a per-token role label.
 
     Each line of fake_dataset.jsonl already carries `token_ids`,
@@ -72,7 +71,7 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
     def __len__(self) -> int:
         return len(self._records)
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> ActivationSample:
         record = self._records[idx]
         target_role = record["metadata"]["target_role"]
         if target_role == "thinking":
@@ -83,11 +82,13 @@ class RoleConversationSamples(Dataset[dict[str, Any]]):
             else NO_ROLE_LABEL
             for role in record["token_roles"]
         ]
-        return {
-            "input_ids": torch.tensor(record["token_ids"], dtype=torch.long),
-            "attention_mask": torch.tensor(record["attention_mask"], dtype=torch.long),
-            "labels": torch.tensor(labels, dtype=torch.long),
-        }
+        return ActivationSample(
+            model_input=SequenceModelInput(
+                input_ids=torch.tensor(record["token_ids"], dtype=torch.long),
+                attention_mask=torch.tensor(record["attention_mask"], dtype=torch.long),
+            ),
+            activation_labels=torch.tensor(labels, dtype=torch.long),
+        )
 
     def turn_positions(self) -> np.ndarray:
         """Flattened ``token_idx_in_turn`` across all records, -1 where unset.
@@ -205,22 +206,8 @@ def main() -> None:
             cache_outputs=True,
             run_dir=Path("runs") / "01_train_role_probes",
         )
-        loader = activation_loader(dataset, batch_size=1)
-        activations = activation_pipeline.run(loader)
+        activations = activation_pipeline.run(dataset, batch_size=1)
         print(activations.summary())
-
-        global_labels = activations.labels
-        unique, counts = np.unique(global_labels, return_counts=True)
-        id_to_role = {v: k for k, v in ROLE_TO_ID.items()}
-        role_counts = {
-            id_to_role.get(label, "NO_ROLE"): int(count)
-            for label, count in zip(unique.tolist(), counts.tolist(), strict=True)
-        }
-        print(
-            f"DEBUG prepared tokens={len(global_labels)} "
-            f"samples={len(np.unique(activations.sample_of_token))} "
-            f"role_counts={role_counts}"
-        )
     else:
         print("All role-space probes already cached; skipping activation extraction.")
 
