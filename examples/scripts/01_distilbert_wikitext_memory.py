@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from examples._utils.data import activation_loader
 from examples._utils.text import WikiTextSamples
 from nnact import ActivationPipeline
 
@@ -22,7 +21,10 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     model = AutoModelForTokenClassification.from_pretrained("bert-base-uncased")
     dataset = WikiTextSamples(tokenizer, n=32, max_length=64)
-    print(f"{len(dataset)} passages | input_ids {tuple(dataset[0]['input_ids'].shape)}")
+    print(
+        f"{len(dataset)} passages | input_ids "
+        f"{tuple(dataset[0].model_input.input_ids.shape)}"
+    )
 
     # run_dir is required for every run: it holds run.log and run_metadata.json.
     pipeline = ActivationPipeline(
@@ -32,8 +34,7 @@ def main() -> None:
         tokenizer=tokenizer,
         run_dir=Path("runs") / "01_distilbert_wikitext_memory",
     )
-    loader = activation_loader(dataset, batch_size=16)
-    activations = pipeline.run(loader)
+    activations = pipeline.run(dataset, batch_size=16)
     print(activations.summary())
 
 

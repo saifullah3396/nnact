@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from examples._utils.data import activation_loader
 from examples._utils.text import WikiTextSamples
 from nnact import ActivationPipeline
 
@@ -34,8 +33,7 @@ def main() -> None:
         output_type="token",
         run_dir=Path("runs") / "02_gpt2_residual_stream",
     )
-    loader = activation_loader(dataset, batch_size=16)
-    activations = pipeline.run(loader)
+    activations = pipeline.run(dataset, batch_size=16)
     print(activations.summary())
 
 

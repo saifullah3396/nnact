@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from examples._utils.data import activation_loader
 from examples._utils.text import WikiTextSamples
 from nnact import ActivationPipeline
 
@@ -38,8 +37,7 @@ def main() -> None:
         cache_outputs=True,
         run_dir=Path("runs") / "04_gpt2_residual_stream_cache",
     )
-    loader = activation_loader(dataset, batch_size=16)
-    activations = pipeline.run(loader)
+    activations = pipeline.run(dataset, batch_size=16)
     print(activations.summary())
     activations.print_cache_info()
 
