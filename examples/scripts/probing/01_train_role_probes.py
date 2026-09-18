@@ -1,15 +1,3 @@
-"""Train role probes on a Qwen model's activations.
-
-Minimal, model-agnostic replacement for the reference 01_train_role_probes.py
-(rcv2/atria_core-based): loads the pre-built fake_dataset.jsonl at the repo
-root as-is (no conversation generation), runs it through nnact's own
-ActivationPipeline against a real Qwen model, then fits a probe per layer
-with ProbeTrainer to see how well each layer's activations predict a
-token's conversational role (user/assistant/system/tool/cot).
-
-Run: python examples/scripts/probing/01_train_role_probes.py
-"""
-
 import json
 import random
 import sys
@@ -30,10 +18,9 @@ from nnact._probing._trainer import FilterFn
 MODEL = "Qwen/Qwen3-1.7B"
 FAKE_DATASET_PATH = Path(__file__).parents[3] / "fake_dataset.jsonl"
 ROLES = ["user", "assistant", "system", "tool", "cot"]
-ROLE_TO_ID = {role: index for index, role in enumerate(ROLES)}
-NO_ROLE_LABEL = -1
+NO_ROLE_LABEL = "none"
 LAYERS_TO_PROBE = 16
-NUM_SAMPLES = 40  # cap for a quick test run, e.g. 100; None uses the full dataset
+NUM_SAMPLES = None  # cap for a quick test run, e.g. 100; None uses the full dataset
 SAMPLE_SEED = 0
 PROBE_CACHE_DIR = Path("runs") / "01_train_role_probes" / "probes"
 # Reference's TensorProbeTrainerConfig.skip_first_n for nested_reasoning=True --
@@ -51,14 +38,6 @@ ROLE_COMBINATIONS = [
 
 
 class RoleConversationSamples(Dataset[ActivationSample]):
-    """Pre-tokenized fake conversations with a per-token role label.
-
-    Each line of fake_dataset.jsonl already carries `token_ids`,
-    `attention_mask`, and `token_roles` (one of ROLES, or None for tokens
-    that aren't part of a labeled turn) at a fixed sequence length, so no
-    tokenization happens here -- this just loads and encodes the roles.
-    """
-
     def __init__(self, path: Path, n: int | None = None, seed: int = 0) -> None:
         with path.open() as f:
             records = [json.loads(line) for line in f]
@@ -77,9 +56,7 @@ class RoleConversationSamples(Dataset[ActivationSample]):
         if target_role == "thinking":
             target_role = "cot"
         labels = [
-            ROLE_TO_ID.get(role, NO_ROLE_LABEL)
-            if role == target_role
-            else NO_ROLE_LABEL
+            role if role == target_role else NO_ROLE_LABEL
             for role in record["token_roles"]
         ]
         return ActivationSample(
@@ -87,19 +64,10 @@ class RoleConversationSamples(Dataset[ActivationSample]):
                 input_ids=torch.tensor(record["token_ids"], dtype=torch.long),
                 attention_mask=torch.tensor(record["attention_mask"], dtype=torch.long),
             ),
-            activation_labels=torch.tensor(labels, dtype=torch.long),
+            activation_labels=labels,
         )
 
     def turn_positions(self) -> np.ndarray:
-        """Flattened ``token_idx_in_turn`` across all records, -1 where unset.
-
-        ``TokenActivationOutput.from_sequence`` drops every padded position
-        (``mask = attention_mask.astype(bool)``, then ``tensor[mask]``)
-        before a sample's tokens ever reach ``ActivationDataset``, so this
-        applies the same ``attention_mask`` filter here -- otherwise this
-        array is longer than ``activations.labels`` by exactly the padded
-        token count and the two can't be compared elementwise.
-        """
         return np.concatenate(
             [
                 np.array(
@@ -120,59 +88,14 @@ class RoleConversationSamples(Dataset[ActivationSample]):
 
 
 def make_drop_outside_role_space(
-    turn_positions: np.ndarray, skip_first_n: int
+    role_space: list[str], turn_positions: np.ndarray, skip_first_n: int
 ) -> FilterFn:
-    """Build a filter_fn that also skips a turn's first ``skip_first_n`` tokens.
-
-    Mirrors the reference's ``positions_in_turn >= skip_first_n`` mask --
-    without it, a role space includes tokens right at a role-switch
-    boundary that the reference always excludes, changing both the
-    eligible-token count and the fitted probe.
-    """
-
     def drop_outside_role_space(
         *, labels: np.ndarray, sample_of_row: np.ndarray, token_ids: np.ndarray | None
     ) -> np.ndarray:
-        return (labels != NO_ROLE_LABEL) & (turn_positions >= skip_first_n)
+        return np.isin(labels, role_space) & (turn_positions >= skip_first_n)
 
     return drop_outside_role_space
-
-
-class RoleSpaceView:
-    """Presents a dataset's global role IDs as a dense 0..k-1 index.
-
-    ProbeTrainer fits directly on whatever ``labels`` a dataset exposes,
-    so probability columns from ``predict_proba`` end up ordered by the
-    classifier's own sorted unique training labels -- not by the label's
-    raw value. Fitting on global IDs like {user: 0, tool: 3} would leave a
-    "tool" prediction's confidence at probabilities[..., 2] (its position
-    among {0, 1, 3}), not probabilities[..., 3]. Remapping labels to
-    0..k-1 up front, exactly as the reference role_combinations loop does
-    with its ``roles_map``, keeps a label's value and column position the
-    same. Everything else -- activations, sample_of_token, token_ids -- is
-    passed through unchanged.
-    """
-
-    def __init__(self, dataset: object, role_space: list[str]) -> None:
-        self._dataset = dataset
-        self._role_to_local_id = {role: index for index, role in enumerate(role_space)}
-        self._global_to_local = {
-            ROLE_TO_ID[role]: index for role, index in self._role_to_local_id.items()
-        }
-
-    @property
-    def labels(self) -> np.ndarray:
-        global_labels = self._dataset.labels
-        local_labels = np.full_like(global_labels, NO_ROLE_LABEL)
-        for global_id, local_id in self._global_to_local.items():
-            local_labels[global_labels == global_id] = local_id
-        return local_labels
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._dataset, name)
-
-    def __len__(self) -> int:
-        return len(self._dataset)
 
 
 def main() -> None:
@@ -218,23 +141,22 @@ def main() -> None:
     for role_space in ROLE_COMBINATIONS:
         role_space_key = ",".join(role[0] for role in role_space)
         cache_path = role_space_cache_paths[",".join(role_space)]
-        dataset_for_role_space = (
-            RoleSpaceView(activations, role_space) if activations is not None else None
-        )
         filter_fn = None
-        if dataset_for_role_space is not None:
-            filter_fn = make_drop_outside_role_space(turn_positions, SKIP_FIRST_N)
-            local_labels = dataset_for_role_space.labels
-            eligible = (local_labels != NO_ROLE_LABEL) & (
-                turn_positions >= SKIP_FIRST_N
+        if activations is not None:
+            filter_fn = make_drop_outside_role_space(
+                role_space, turn_positions, SKIP_FIRST_N
             )
-            role_map = {role: index for index, role in enumerate(role_space)}
+            eligible = filter_fn(
+                labels=activations.labels,
+                sample_of_row=activations.sample_of_token,
+                token_ids=getattr(activations, "token_ids", None),
+            )
             print(
                 f"DEBUG role_space={role_space} eligible_tokens={int(eligible.sum())} "
-                f"role_map={role_map} skip_first_n={SKIP_FIRST_N}"
+                f"skip_first_n={SKIP_FIRST_N}"
             )
         result = probe_pipeline.train(
-            dataset_for_role_space,
+            activations,
             layer_name,
             cache_path=cache_path,
             filter_fn=filter_fn,
@@ -242,8 +164,8 @@ def main() -> None:
         metrics = result.metrics
         confusion_table = pd.DataFrame(
             metrics.confusion_matrix,
-            index=pd.Index(role_space, name="true"),
-            columns=pd.Index(role_space, name="predicted"),
+            index=pd.Index(result.classes_, name="true"),
+            columns=pd.Index(result.classes_, name="predicted"),
         )
         print(f"\nconfusion matrix [{role_space_key}]:\n{confusion_table}\n")
         rows.append(

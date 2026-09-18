@@ -17,7 +17,7 @@ class ProbeMetrics:
 
 
 def evaluate_predictions(
-    y_true: np.ndarray, y_pred: np.ndarray, *, labels: list[int] | None = None
+    y_true: np.ndarray, y_pred: np.ndarray, *, labels: np.ndarray | None = None
 ) -> ProbeMetrics:
     """Score predictions against ground truth with standard sklearn metrics.
 

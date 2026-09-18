@@ -20,10 +20,13 @@ class EvalResult:
     predictions: np.ndarray
     probabilities: np.ndarray
     targets: np.ndarray
+    classes_: np.ndarray
 
     @property
     def metrics(self) -> ProbeMetrics:
-        return evaluate_predictions(self.targets, self.predictions)
+        return evaluate_predictions(
+            self.targets, self.predictions, labels=np.arange(len(self.classes_))
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -41,10 +44,13 @@ class TrainResult:
     probabilities: np.ndarray
     targets: np.ndarray
     estimator: Any
+    classes_: np.ndarray
 
     @property
     def metrics(self) -> ProbeMetrics:
-        return evaluate_predictions(self.targets, self.predictions)
+        return evaluate_predictions(
+            self.targets, self.predictions, labels=np.arange(len(self.classes_))
+        )
 
     def save(self, path: str | Path) -> None:
         """Pickle this result -- arrays, metrics inputs, and the fitted

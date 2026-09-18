@@ -140,9 +140,7 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
                 )
 
             if output.labels is not None:
-                self._append_dataset(
-                    file, LABELS_KEY, output.labels, output.labels.dtype
-                )
+                self._append_dataset(file, LABELS_KEY, output.labels, STR_DTYPE)
 
             self._append_activations(file, output.activations)
 
@@ -169,7 +167,15 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
 
     @property
     def labels(self) -> np.ndarray | None:
-        return self._read_dataset(LABELS_KEY)
+        with h5py.File(self._path, "r") as file:
+            if LABELS_KEY not in file:
+                return None
+            return np.asarray(
+                [
+                    s.decode() if isinstance(s, bytes) else s
+                    for s in file[LABELS_KEY].asstr()[...]
+                ]
+            )
 
 
 @final
@@ -205,9 +211,7 @@ class H5TokenActivationDataset(_H5ActivationDataset):
                 )
 
             if output.labels is not None:
-                self._append_dataset(
-                    file, LABELS_KEY, output.labels, output.labels.dtype
-                )
+                self._append_dataset(file, LABELS_KEY, output.labels, STR_DTYPE)
 
             if output.token_ids is not None:
                 self._append_dataset(
@@ -258,7 +262,15 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
     @property
     def labels(self) -> np.ndarray | None:
-        return self._read_dataset(LABELS_KEY)
+        with h5py.File(self._path, "r") as file:
+            if LABELS_KEY not in file:
+                return None
+            return np.asarray(
+                [
+                    s.decode() if isinstance(s, bytes) else s
+                    for s in file[LABELS_KEY].asstr()[...]
+                ]
+            )
 
     @property
     def token_ids(self) -> np.ndarray | None:

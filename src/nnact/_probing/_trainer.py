@@ -48,6 +48,7 @@ class ProbeTrainer:
     def __init__(self, config: ProbeConfig) -> None:
         self._config = config
         self.estimator_: object | None = None
+        self.classes_: np.ndarray | None = None
 
     def train(
         self,
@@ -80,12 +81,27 @@ class ProbeTrainer:
         assert self.estimator_ is not None, (
             "no fitted estimator; call train() before evaluate()."
         )
+        assert self.classes_ is not None, (
+            "no known class set; call train() before evaluate()."
+        )
 
         x, y, _sample_of_row = self._select(
             dataset, layer_name, filter_fn=filter_fn, pool_fn=pool_fn
         )
+        unknown_labels = set(np.unique(y).tolist()) - set(self.classes_.tolist())
+        if unknown_labels:
+            raise ValueError(
+                f"dataset has label(s) {unknown_labels} the probe was never "
+                f"trained on; known classes are {self.classes_.tolist()}."
+            )
+        y_idx = np.searchsorted(self.classes_, y)
         predictions, probabilities = self._predict(x)
-        return EvalResult(predictions=predictions, probabilities=probabilities, targets=y)
+        return EvalResult(
+            predictions=predictions,
+            probabilities=probabilities,
+            targets=y_idx,
+            classes_=self.classes_,
+        )
 
     def load(self, path: str | Path) -> TrainResult:
         """Restore the fitted estimator from a :class:`TrainResult` cached by
@@ -95,6 +111,7 @@ class ProbeTrainer:
         """
         result = TrainResult.load(path)
         self.estimator_ = result.estimator
+        self.classes_ = result.classes_
         return result
 
     def _select(
@@ -190,17 +207,21 @@ class ProbeTrainer:
                 "present in the test split -- check that filter_fn/labels "
                 "actually include tokens for every role in this role space."
             )
+
+        classes = np.unique(y_train)
+        y_train_idx = np.searchsorted(classes, y_train)
+        y_test_idx = np.searchsorted(classes, y_test)
+
         logger.info(
             "DEBUG fit features shape=%s dtype=%s; train_labels shape=%s dtype=%s "
-            "unique=%s; test_labels shape=%s dtype=%s unique=%s",
+            "classes=%s; test_labels shape=%s dtype=%s",
             x_train.shape,
             x_train.dtype,
-            y_train.shape,
-            y_train.dtype,
-            np.unique(y_train).tolist(),
-            y_test.shape,
-            y_test.dtype,
-            np.unique(y_test).tolist(),
+            y_train_idx.shape,
+            y_train_idx.dtype,
+            classes.tolist(),
+            y_test_idx.shape,
+            y_test_idx.dtype,
         )
 
         steps = []
@@ -219,17 +240,19 @@ class ProbeTrainer:
         estimator = cuml.pipeline.Pipeline(steps) if len(steps) > 1 else steps[0][1]
 
         cupy_x_train = cupy.asarray(x_train)
-        cupy_y_train = cupy.asarray(y_train)
+        cupy_y_train = cupy.asarray(y_train_idx)
 
         estimator.fit(cupy_x_train, cupy_y_train)
         self.estimator_ = estimator
+        self.classes_ = classes
 
         predictions, probabilities = self._predict(x_test)
         return TrainResult(
             predictions=predictions,
             probabilities=probabilities,
-            targets=y_test,
+            targets=y_test_idx,
             estimator=estimator,
+            classes_=classes,
         )
 
     def _predict(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

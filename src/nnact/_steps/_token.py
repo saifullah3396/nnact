@@ -79,7 +79,7 @@ class TokenActivationStep:
             sequence_output,
             mask=tensor_to_numpy(attention_mask),
             labels=(
-                tensor_to_numpy(batch.activation_labels)
+                np.asarray(batch.activation_labels)
                 if batch.activation_labels is not None
                 else None
             ),

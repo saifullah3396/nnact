@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 from ignite.engine import Engine
 
@@ -58,7 +59,7 @@ class SequenceActivationStep:
                 else None
             ),
             labels=(
-                tensor_to_numpy(batch.activation_labels)
+                np.asarray(batch.activation_labels)
                 if batch.activation_labels is not None
                 else None
             ),
