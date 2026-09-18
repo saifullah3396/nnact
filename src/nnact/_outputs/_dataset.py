@@ -247,8 +247,9 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             columns ``sample`` (which accumulated sample the token belongs
             to), ``token_id`` and ``token`` (present only when a tokenizer was
             given to the pipeline), ``predicted_id`` (the model's own argmax
-            prediction for that token), and one ``{layer}_norm`` column per
-            layer holding that token's activation L2 norm.
+            prediction for that token), one column per caller-attached
+            metadata key, and one ``{layer}_norm`` column per layer holding
+            that token's activation L2 norm.
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
@@ -268,6 +269,11 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             columns["token"] = tokens.tolist()
 
         columns["predicted_id"] = self.prediction.tolist()
+
+        metadata = self.metadata
+        if metadata is not None:
+            for key, values in metadata.items():
+                columns[key] = values.tolist()
 
         for name, tensor in self.activations.items():
             # float16 activations can exceed ~65504 in a transformer's
