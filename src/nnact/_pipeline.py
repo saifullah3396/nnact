@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, final
 
+import torch
 from torch import nn
 from transformers import PreTrainedTokenizerBase
 
@@ -37,7 +38,7 @@ class ActivationPipeline:
         layer_names: str | list[str],
         output_type: Literal["sequence", "token"],
         run_dir: str | Path,
-        device: Any | None = None,
+        device: torch.device | str | None = None,
         tokenizer: PreTrainedTokenizerBase | None = None,
         show_progress: bool = True,
         cache_outputs: bool = False,
@@ -45,6 +46,9 @@ class ActivationPipeline:
         assert output_type in ("sequence", "token"), (
             f"Unknown output_type '{output_type}', expected 'sequence' or 'token'."
         )
+
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self._run_dir = Path(run_dir)
         self._run_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +101,7 @@ class ActivationPipeline:
         output_type: Literal["sequence", "token"],
         hooked_model: HookedModel,
         layer_names: list[str],
-        device: Any | None,
+        device: torch.device | str,
         tokenizer: PreTrainedTokenizerBase | None,
         show_progress: bool,
     ) -> ActivationStepRunner:

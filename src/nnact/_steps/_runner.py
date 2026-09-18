@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Literal, final
 
+import torch
 from ignite.engine import Engine
 from ignite.handlers import Timer
 from transformers import PreTrainedTokenizerBase
@@ -23,7 +24,7 @@ class ActivationStepRunner:
         output_type: Literal["sequence", "token"],
         hooked_model: HookedModel,
         layer_names: list[str],
-        device: Any | None = None,
+        device: torch.device | str = "cpu",
         tokenizer: PreTrainedTokenizerBase | None = None,
         handlers: Iterable[ActivationAccumulator] = (),
         show_progress: bool = True,
@@ -48,7 +49,7 @@ class ActivationStepRunner:
         output_type: Literal["sequence", "token"],
         hooked_model: HookedModel,
         layer_names: list[str],
-        device: Any | None,
+        device: torch.device | str = "cpu",
         tokenizer: PreTrainedTokenizerBase | None,
     ) -> SequenceActivationStep | TokenActivationStep:
         assert output_type in ("sequence", "token"), (
@@ -91,5 +92,6 @@ class ActivationStepRunner:
         return engine, timer
 
     def run(self, loader: Any) -> tuple[Engine, Timer]:
+        self._step._init_model_device()
         self._engine.run(loader, max_epochs=1)
         return self._engine, self._timer

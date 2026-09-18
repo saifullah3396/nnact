@@ -24,6 +24,9 @@ class SequenceActivationStep:
         self._device = device
         self._hooked_model.check_layers(self._layer_names)
 
+    def _init_model_device(self):
+        self._hooked_model = self._hooked_model.to(self._device)
+
     @torch.no_grad()
     def __call__(
         self,

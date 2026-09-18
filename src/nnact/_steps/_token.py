@@ -20,7 +20,7 @@ class TokenActivationStep:
         self,
         hooked_model: HookedModel,
         layer_names: list[str],
-        device: torch.device | str | None,
+        device: torch.device | str = "cpu",
         tokenizer: PreTrainedTokenizerBase | None = None,
     ) -> None:
         self._hooked_model = hooked_model
@@ -28,6 +28,9 @@ class TokenActivationStep:
         self._device = device
         self._tokenizer = tokenizer
         self._hooked_model.check_layers(self._layer_names)
+
+    def _init_model_device(self):
+        self._hooked_model = self._hooked_model.to(self._device)
 
     @torch.no_grad()
     def __call__(
@@ -63,7 +66,9 @@ class TokenActivationStep:
         sequence_output = SequenceActivationOutput(
             logits=tensor_to_numpy(raw_output.logits),
             loss=(
-                tensor_to_numpy(raw_output.loss) if raw_output.loss is not None else None
+                tensor_to_numpy(raw_output.loss)
+                if raw_output.loss is not None
+                else None
             ),
             activations=activations,
         )

@@ -86,10 +86,10 @@ def main() -> None:
         [layer_name],
         output_type="token",
         tokenizer=tokenizer,
-        cache_outputs=True,
+        cache_outputs=False,
         run_dir=Path("runs") / "01_train_role_probes",
     )
-    loader = activation_loader(dataset, batch_size=4)
+    loader = activation_loader(dataset, batch_size=1)
     activations = pipeline.run(loader)
     print(activations.summary())
 
