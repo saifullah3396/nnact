@@ -180,13 +180,6 @@ class HookedModel(nn.Module):
                                 f"is not a Tensor, got {type(output)}"
                             )
 
-                        # Matches the reference's `.cpu().half()`: activations
-                        # are rounded to float16 at capture time, not just for
-                        # storage -- so a probe trained on this pipeline's
-                        # activations sees the same precision loss as one
-                        # trained on the reference's.
-                        if tensor.is_floating_point():
-                            tensor = tensor.half()
                         self._activations[layer_key] = tensor_to_numpy(tensor)
 
                     return hook
