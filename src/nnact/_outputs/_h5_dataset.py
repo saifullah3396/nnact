@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false, reportIndexIssue=false, reportArgumentType=false, reportReturnType=false, reportInvalidTypeArguments=false
+
 from __future__ import annotations
 
 from pathlib import Path

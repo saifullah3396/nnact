@@ -161,7 +161,7 @@ class ActivationPipeline:
         names = [layer_names] if isinstance(layer_names, str) else list(layer_names)
 
         self._model_name = type(model).__name__
-        self._output_type = output_type
+        self._output_type: Literal["sequence", "token"] = output_type
         self._layer_names = names
 
         self._accumulator = self._build_accumulator(

@@ -32,6 +32,11 @@ class ActivationDataset(Dataset, ABC):
     def activations(self) -> dict[str, np.ndarray]:
         """Every layer's accumulated activations, stacked across samples."""
 
+    @property
+    @abstractmethod
+    def metadata(self) -> dict[str, np.ndarray] | None:
+        """Caller-attached row-aligned metadata, when present."""
+
     @abstractmethod
     def __len__(self) -> int:
         """Number of samples held."""

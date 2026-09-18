@@ -38,13 +38,13 @@ def test_call_produces_one_row_per_sample_with_scalar_metadata() -> None:
     ]
     batch = SequenceActivationBatch.from_samples(samples=samples)
 
-    output = step(None, batch)
+    output = step(None, batch)  # type: ignore[arg-type]
 
     assert output.batch_size == 2
     assert output.activations["linear"].shape == (2, 2, 4)
     assert output.metadata is not None
     assert output.metadata["label"].tolist() == ["user", "assistant"]
-    assert not hasattr(output, "loss") or output.loss is None
+    assert getattr(output, "loss", None) is None
 
 
 def test_call_without_metadata_leaves_it_none() -> None:
@@ -52,6 +52,6 @@ def test_call_without_metadata_leaves_it_none() -> None:
     samples = [SequenceActivationSample(model_input=make_model_input(ids=[1, 2]))]
     batch = SequenceActivationBatch.from_samples(samples=samples)
 
-    output = step(None, batch)
+    output = step(None, batch)  # type: ignore[arg-type]
 
     assert output.metadata is None

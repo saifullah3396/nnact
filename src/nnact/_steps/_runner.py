@@ -6,6 +6,7 @@ from typing import Any, Literal, final
 import torch
 from ignite.engine import Engine
 from ignite.handlers import Timer
+from ignite.handlers.tqdm_logger import ProgressBar
 from transformers import PreTrainedTokenizerBase
 
 from nnact._model._hooked import HookedModel
@@ -126,8 +127,6 @@ class ActivationStepRunner:
             handler.attach(engine=engine)
 
         if show_progress:
-            from ignite.contrib.handlers import ProgressBar
-
             ProgressBar(desc="activations").attach(engine)
 
         return engine, timer
