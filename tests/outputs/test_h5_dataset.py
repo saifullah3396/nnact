@@ -29,7 +29,9 @@ def test_sequence_h5_round_trip(tmp_path: Path) -> None:
     assert len(dataset) == 2
     assert dataset.metadata is not None
     assert dataset.metadata["label"].tolist() == ["user", "assistant"]
-    assert dataset.activations["layer0"].shape == (2, 3, 4)
+    activations = dataset.activations("layer0")
+    assert activations.shape == (2, 3, 4)
+    assert dataset.activations("layer0") is activations
 
     dataset.close(delete=True)
     assert not dataset.exists()
@@ -62,7 +64,7 @@ def test_token_h5_round_trip(tmp_path: Path) -> None:
     summary = dataset.summary()
     assert "label" in summary.columns
     assert "loss" not in summary.columns
-    assert "layer0_norm" in summary.columns
+    assert "layer0_norm" not in summary.columns
 
 
 def test_token_h5_metadata_none_when_never_written(tmp_path: Path) -> None:

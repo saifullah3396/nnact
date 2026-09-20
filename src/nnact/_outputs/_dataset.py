@@ -27,10 +27,9 @@ class ActivationDataset(Dataset, ABC):
     def layer_names(self) -> list[str]:
         """Names of the layers held, in first-batch order."""
 
-    @property
     @abstractmethod
-    def activations(self) -> dict[str, np.ndarray]:
-        """Every layer's accumulated activations, stacked across samples."""
+    def activations(self, layer_name: str) -> np.ndarray:
+        """One layer's accumulated activations, stacked across samples."""
 
     @property
     @abstractmethod
@@ -51,7 +50,7 @@ class ActivationDataset(Dataset, ABC):
 
     def layer_shape(self, layer_name: str) -> tuple[int, ...]:
         """Per-sample activation shape for one layer, excluding the sample axis."""
-        return tuple(self.activations[layer_name].shape[1:])
+        return tuple(self.activations(layer_name).shape[1:])
 
     def summary(self) -> pd.DataFrame:
         """Tabulate the accumulated layers as a :class:`pandas.DataFrame`.
@@ -63,7 +62,7 @@ class ActivationDataset(Dataset, ABC):
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
-                ``nnact``; use :attr:`layer_names` and :attr:`activations`
+                ``nnact``; use :attr:`layer_names` and :meth:`activations`
                 instead.
         """
         import pandas as pd
@@ -87,9 +86,9 @@ class ActivationDataset(Dataset, ABC):
 class InMemorySequenceActivationDataset(ActivationDataset):
     """Activations accumulated in memory from :class:`SequenceActivationOutput` batches.
 
-    Every batch's arrays are held as-is and only concatenated lazily, on
-    each property access -- cheap to accumulate, at the cost of
-    re-concatenating on every read.
+    Every batch's arrays are held as-is and concatenated lazily. The result
+    is cached per layer, so repeated reads return the same array without
+    concatenating again.
     """
 
     def __init__(self) -> None:
@@ -97,6 +96,7 @@ class InMemorySequenceActivationDataset(ActivationDataset):
         self._top_probabilities: list[np.ndarray] = []
         self._metadata: dict[str, list[np.ndarray]] = {}
         self._activations: dict[str, list[np.ndarray]] = {}
+        self._activation_cache: dict[str, np.ndarray] = {}
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
         """Append one batch's fields to this dataset's accumulated lists."""
@@ -107,6 +107,7 @@ class InMemorySequenceActivationDataset(ActivationDataset):
                 self._metadata.setdefault(key, []).append(value)
         for name, tensor in output.activations.items():
             self._activations.setdefault(name, []).append(tensor)
+            self._activation_cache.pop(name, None)
 
     @property
     @override
@@ -133,13 +134,17 @@ class InMemorySequenceActivationDataset(ActivationDataset):
             for key, values in self._metadata.items()
         }
 
-    @property
     @override
-    def activations(self) -> dict[str, np.ndarray]:
-        return {
-            name: np.concatenate(tensors, axis=0)
-            for name, tensors in self._activations.items()
-        }
+    def activations(self, layer_name: str) -> np.ndarray:
+        if layer_name not in self._activation_cache:
+            self._activation_cache[layer_name] = np.concatenate(
+                self._activations[layer_name], axis=0
+            )
+        return self._activation_cache[layer_name]
+
+    @override
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
+        return tuple(self._activations[layer_name][0].shape[1:])
 
     @override
     def __len__(self) -> int:
@@ -150,9 +155,9 @@ class InMemorySequenceActivationDataset(ActivationDataset):
 class InMemoryTokenActivationDataset(ActivationDataset):
     """Activations accumulated in memory from :class:`TokenActivationOutput` batches.
 
-    Every batch's arrays are held as-is and only concatenated lazily, on
-    each property access -- cheap to accumulate, at the cost of
-    re-concatenating on every read.
+    Every batch's arrays are held as-is and concatenated lazily. The result
+    is cached per layer, so repeated reads return the same array without
+    concatenating again.
     """
 
     def __init__(self) -> None:
@@ -161,6 +166,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         self._top_probabilities: list[np.ndarray] = []
         self._metadata: dict[str, list[np.ndarray]] = {}
         self._activations: dict[str, list[np.ndarray]] = {}
+        self._activation_cache: dict[str, np.ndarray] = {}
         self._token_ids: list[np.ndarray] = []
         self._tokens: list[np.ndarray] = []
 
@@ -175,6 +181,7 @@ class InMemoryTokenActivationDataset(ActivationDataset):
                 self._metadata.setdefault(key, []).append(value)
         for name, tensor in output.activations.items():
             self._activations.setdefault(name, []).append(tensor)
+            self._activation_cache.pop(name, None)
         if output.token_ids is not None:
             self._token_ids.append(output.token_ids)
         if output.tokens is not None:
@@ -210,13 +217,17 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             for key, values in self._metadata.items()
         }
 
-    @property
     @override
-    def activations(self) -> dict[str, np.ndarray]:
-        return {
-            name: np.concatenate(tensors, axis=0)
-            for name, tensors in self._activations.items()
-        }
+    def activations(self, layer_name: str) -> np.ndarray:
+        if layer_name not in self._activation_cache:
+            self._activation_cache[layer_name] = np.concatenate(
+                self._activations[layer_name], axis=0
+            )
+        return self._activation_cache[layer_name]
+
+    @override
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
+        return tuple(self._activations[layer_name][0].shape[1:])
 
     @property
     def token_ids(self) -> np.ndarray | None:
@@ -253,13 +264,12 @@ class InMemoryTokenActivationDataset(ActivationDataset):
             to), ``token_id`` and ``token`` (present only when a tokenizer was
             given to the pipeline), ``predicted_id`` (the model's own argmax
             prediction for that token), ``predicted_probability``, one column
-            per caller-attached metadata key, and one ``{layer}_norm`` column
-            per layer holding that token's activation L2 norm.
+            per caller-attached metadata key.
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
                 ``nnact``; use :attr:`token_ids`, :attr:`tokens`, and
-                :attr:`activations` instead.
+                :meth:`activations` instead.
         """
         import pandas as pd
 
@@ -280,15 +290,6 @@ class InMemoryTokenActivationDataset(ActivationDataset):
         if metadata is not None:
             for key, values in metadata.items():
                 columns[key] = values.tolist()
-
-        for name, tensor in self.activations.items():
-            # float16 activations can exceed ~65504 in a transformer's
-            # residual stream; squaring them in-dtype for the norm overflows
-            # to inf, so compute the norm in float32 regardless of storage
-            # dtype.
-            columns[f"{name}_norm"] = np.linalg.norm(
-                tensor.astype(np.float32), axis=-1
-            ).tolist()
 
         return pd.DataFrame(
             columns, index=pd.RangeIndex(int(offsets[-1]), name="token")

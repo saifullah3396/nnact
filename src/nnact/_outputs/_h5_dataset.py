@@ -70,6 +70,7 @@ class _H5ActivationDataset(ActivationDataset):
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
+        self._activation_cache: dict[str, np.ndarray] = {}
 
     @property
     def path(self) -> Path:
@@ -188,14 +189,19 @@ class _H5ActivationDataset(ActivationDataset):
             group = file.get(LAYERS_GROUP)
             return list(group.keys()) if group is not None else []
 
-    @property
     @override
-    def activations(self) -> dict[str, np.ndarray]:
+    def activations(self, layer_name: str) -> np.ndarray:
+        if layer_name not in self._activation_cache:
+            with h5py.File(self._path, "r") as file:
+                self._activation_cache[layer_name] = np.asarray(
+                    file[f"{LAYERS_GROUP}/{layer_name}"][...]
+                )
+        return self._activation_cache[layer_name]
+
+    @override
+    def layer_shape(self, layer_name: str) -> tuple[int, ...]:
         with h5py.File(self._path, "r") as file:
-            group = file.get(LAYERS_GROUP)
-            if group is None:
-                return {}
-            return {name: np.asarray(ds[...]) for name, ds in group.items()}
+            return tuple(file[f"{LAYERS_GROUP}/{layer_name}"].shape[1:])
 
     def print_cache_info(self) -> None:
         """Print the backing file's path and its current size on disk."""
@@ -211,6 +217,7 @@ class _H5ActivationDataset(ActivationDataset):
         """
         if delete:
             self._path.unlink(missing_ok=True)
+            self._activation_cache.clear()
 
 
 @final
@@ -219,6 +226,8 @@ class H5SequenceActivationDataset(_H5ActivationDataset):
 
     def _add_batch(self, output: SequenceActivationOutput) -> None:
         """Open the backing file, append one batch's fields, and close it again."""
+        for name in output.activations:
+            self._activation_cache.pop(name, None)
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
                 file=file,
@@ -269,6 +278,8 @@ class H5TokenActivationDataset(_H5ActivationDataset):
 
     def _add_batch(self, output: TokenActivationOutput) -> None:
         """Open the backing file, append one batch's fields, and close it again."""
+        for name in output.activations:
+            self._activation_cache.pop(name, None)
         with h5py.File(self._path, "a") as file:
             self._append_dataset(
                 file=file,
@@ -378,13 +389,12 @@ class H5TokenActivationDataset(_H5ActivationDataset):
             to), ``token_id`` and ``token`` (present only when a tokenizer was
             given to the pipeline), ``predicted_id`` (the model's own argmax
             prediction for that token), ``predicted_probability``, one column
-            per caller-attached metadata key, and one ``{layer}_norm`` column
-            per layer holding that token's activation L2 norm.
+            per caller-attached metadata key.
 
         Raises:
             ImportError: If pandas is not installed. It is not a dependency of
                 ``nnact``; use :attr:`token_ids`, :attr:`tokens`, and
-                :attr:`activations` instead.
+                :meth:`activations` instead.
         """
         import pandas as pd
 
@@ -405,9 +415,6 @@ class H5TokenActivationDataset(_H5ActivationDataset):
         if metadata is not None:
             for key, values in metadata.items():
                 columns[key] = values.tolist()
-
-        for name, tensor in self.activations.items():
-            columns[f"{name}_norm"] = np.linalg.norm(tensor, axis=-1).tolist()
 
         return pd.DataFrame(
             columns, index=pd.RangeIndex(int(offsets[-1]), name="token")

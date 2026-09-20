@@ -104,7 +104,7 @@ class ActivationPipeline:
         ...     output_type="token",
         ... )  # doctest: +SKIP
         >>> result = pipeline.run(dataset=dataset, batch_size=8)  # doctest: +SKIP
-        >>> result.dataset.activations["transformer.h.0"].shape  # doctest: +SKIP
+        >>> result.dataset.activations("transformer.h.0").shape  # doctest: +SKIP
     """
 
     def __init__(

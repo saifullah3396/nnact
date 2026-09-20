@@ -32,7 +32,9 @@ def test_sequence_dataset_accumulates_across_batches() -> None:
     assert len(dataset) == 3
     assert dataset.metadata is not None
     assert dataset.metadata["label"].tolist() == ["a", "b", "c"]
-    assert dataset.activations["layer0"].shape == (3, 3, 4)
+    activations = dataset.activations("layer0")
+    assert activations.shape == (3, 3, 4)
+    assert dataset.activations("layer0") is activations
 
 
 def test_sequence_dataset_metadata_is_none_when_never_provided() -> None:
@@ -76,4 +78,4 @@ def test_token_dataset_accumulates_offsets_and_derived_fields() -> None:
 
     summary = dataset.summary()
     assert "label" in summary.columns
-    assert "layer0_norm" in summary.columns
+    assert "layer0_norm" not in summary.columns
