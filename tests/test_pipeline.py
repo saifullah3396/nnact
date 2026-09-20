@@ -47,12 +47,11 @@ def test_token_pipeline_in_memory() -> None:
         seqs=[[1, 2, 3], [4, 5, 3]], metas=[["a", "b", "c"], ["d", "e", "c"]]
     )
     pipeline = ActivationPipeline(
-        model=FakeModel(),
         layer_names=["linear"],
         output_type="token",
         show_progress=False,
     )
-    result = pipeline.run(dataset=dataset, batch_size=2)
+    result = pipeline.run(dataset=dataset, batch_size=2, model_fn=FakeModel)
 
     assert len(result.dataset) == 2
     assert result.dataset.metadata is not None
@@ -65,12 +64,11 @@ def test_token_pipeline_in_memory() -> None:
 def test_sequence_pipeline_in_memory() -> None:
     dataset = SequenceDataset(seqs=[[1, 2], [3, 4]], metas=["user", "assistant"])
     pipeline = ActivationPipeline(
-        model=FakeModel(),
         layer_names=["linear"],
         output_type="sequence",
         show_progress=False,
     )
-    result = pipeline.run(dataset=dataset, batch_size=2)
+    result = pipeline.run(dataset=dataset, batch_size=2, model_fn=FakeModel)
 
     assert len(result.dataset) == 2
     assert result.dataset.metadata is not None
@@ -80,18 +78,29 @@ def test_sequence_pipeline_in_memory() -> None:
 def test_cached_pipeline_resumes_without_rerunning(tmp_path: Path) -> None:
     dataset = SequenceDataset(seqs=[[1, 2], [3, 4]], metas=["user", "assistant"])
     pipeline = ActivationPipeline(
-        model=FakeModel(),
         layer_names=["linear"],
         output_type="sequence",
         cache_dir=tmp_path,
         cache_outputs=True,
         show_progress=False,
     )
-    first = pipeline.run(dataset=dataset, batch_size=2)
+    first = pipeline.run(dataset=dataset, batch_size=2, model_fn=FakeModel)
     assert "duration_seconds" in first.metadata
 
-    second = pipeline.run(dataset=dataset, batch_size=2)
-    assert "duration_seconds" not in second.metadata
+    def fail_if_called() -> FakeModel:
+        raise AssertionError("model_fn must not be called when the cache exists")
+
+    resumed_pipeline = ActivationPipeline(
+        layer_names=["linear"],
+        output_type="sequence",
+        cache_dir=tmp_path,
+        cache_outputs=True,
+        show_progress=False,
+    )
+    second = resumed_pipeline.run(
+        dataset=dataset, batch_size=2, model_fn=fail_if_called
+    )
+    assert second.metadata == first.metadata
     assert len(second.dataset) == 2
     assert second.dataset.metadata is not None
     assert second.dataset.metadata["label"].tolist() == ["user", "assistant"]

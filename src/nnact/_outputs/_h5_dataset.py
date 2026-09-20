@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, final, override
 
@@ -23,6 +24,7 @@ OFFSETS_KEY = "offsets"
 LAYERS_GROUP = "activations"
 METADATA_GROUP = "metadata"
 STR_DTYPE = h5py.string_dtype(encoding="utf-8")
+RUN_METADATA_ATTRIBUTE = "run_metadata"
 
 
 def _h5_dtype_for(values: np.ndarray) -> object:
@@ -207,6 +209,26 @@ class _H5ActivationDataset(ActivationDataset):
         """Print the backing file's path and its current size on disk."""
         size = self._path.stat().st_size if self._path.exists() else 0
         print(f"cache: {self._path} ({size / 1024**2:.1f} MB)")
+
+    @property
+    def run_metadata(self) -> dict[str, object] | None:
+        """Pipeline run metadata stored with the cached activations."""
+        if not self._path.exists():
+            return None
+        with h5py.File(self._path, "r") as file:
+            encoded = file.attrs.get(RUN_METADATA_ATTRIBUTE)
+        if encoded is None:
+            return None
+        if isinstance(encoded, bytes):
+            encoded = encoded.decode()
+        value = json.loads(str(encoded))
+        assert isinstance(value, dict)
+        return value
+
+    def _write_run_metadata(self, metadata: dict[str, object]) -> None:
+        """Persist pipeline run metadata as a JSON-encoded file attribute."""
+        with h5py.File(self._path, "a") as file:
+            file.attrs[RUN_METADATA_ATTRIBUTE] = json.dumps(metadata)
 
     def close(self, delete: bool = False) -> None:
         """Optionally remove the backing HDF5 file.

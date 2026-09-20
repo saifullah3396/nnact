@@ -30,10 +30,22 @@ class ActivationAccumulator(ABC):
     constructing an accumulator directly.
     """
 
+    def __init__(self) -> None:
+        self._run_metadata: dict[str, object] | None = None
+
     @property
     @abstractmethod
     def dataset(self) -> ActivationDataset:
         """The dataset built so far."""
+
+    @property
+    def run_metadata(self) -> dict[str, object] | None:
+        """Metadata for the completed pipeline run, if available."""
+        return self._run_metadata
+
+    def save_run_metadata(self, metadata: dict[str, object]) -> None:
+        """Associate metadata with the completed pipeline run."""
+        self._run_metadata = metadata
 
     @abstractmethod
     def _add_batch(
@@ -82,6 +94,7 @@ class InMemorySequenceActivationAccumulator(ActivationAccumulator):
     """Accumulates :class:`SequenceActivationOutput` batches in memory."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._dataset = InMemorySequenceActivationDataset()
 
     @property
@@ -104,6 +117,7 @@ class InMemoryTokenActivationAccumulator(ActivationAccumulator):
     """Accumulates :class:`TokenActivationOutput` batches in memory."""
 
     def __init__(self) -> None:
+        super().__init__()
         self._dataset = InMemoryTokenActivationDataset()
 
     @property
@@ -133,6 +147,15 @@ class _H5ActivationAccumulator(ActivationAccumulator):
     @abstractmethod
     def dataset(self) -> H5SequenceActivationDataset | H5TokenActivationDataset: ...
 
+    @property
+    @override
+    def run_metadata(self) -> dict[str, object] | None:
+        return self.dataset.run_metadata
+
+    @override
+    def save_run_metadata(self, metadata: dict[str, object]) -> None:
+        self.dataset._write_run_metadata(metadata=metadata)
+
     @override
     def _on_exception(self, engine: Engine, exc: BaseException) -> None:
         self.dataset.close(delete=True)
@@ -144,6 +167,7 @@ class H5SequenceActivationAccumulator(_H5ActivationAccumulator):
     """Streams :class:`SequenceActivationOutput` batches to an HDF5 file."""
 
     def __init__(self, path: str | Path) -> None:
+        super().__init__()
         self._dataset = H5SequenceActivationDataset(path=path)
 
     @property
@@ -166,6 +190,7 @@ class H5TokenActivationAccumulator(_H5ActivationAccumulator):
     """Streams :class:`TokenActivationOutput` batches to an HDF5 file."""
 
     def __init__(self, path: str | Path) -> None:
+        super().__init__()
         self._dataset = H5TokenActivationDataset(path=path)
 
     @property

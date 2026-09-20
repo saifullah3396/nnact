@@ -33,6 +33,10 @@ def test_sequence_h5_round_trip(tmp_path: Path) -> None:
     assert activations.shape == (2, 3, 4)
     assert dataset.activations("layer0") is activations
 
+    run_metadata = {"model": "FakeModel", "layer_names": ["layer0"]}
+    dataset._write_run_metadata(run_metadata)
+    assert dataset.run_metadata == run_metadata
+
     dataset.close(delete=True)
     assert not dataset.exists()
 

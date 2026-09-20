@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,14 +75,12 @@ class RunResult:
 
     Attributes:
         dataset: The accumulated activations.
-        metadata: Facts about the run -- ``model``, ``output_type``,
-            ``layer_names``, and ``num_samples`` are always present. When the
-            run actually executed a forward pass, ``started_at``,
+        metadata: Facts about the run -- ``output_type``, ``layer_names``, and
+            ``num_samples`` are always present. When the run actually executed
+            a forward pass, ``model``, ``started_at``,
             ``finished_at``, ``duration_seconds``, and ``env`` are present
-            too; when :meth:`ActivationPipeline.run` instead resumed a
-            previously cached ``dataset`` without running the model, those
-            four keys are absent, since no fresh run produced them. Check
-            for ``"duration_seconds"`` to tell the two cases apart.
+            too. Cached runs persist and return this same metadata on later
+            calls without loading the model again.
     """
 
     dataset: ActivationDataset
@@ -99,17 +98,17 @@ class ActivationPipeline:
 
     Example:
         >>> pipeline = ActivationPipeline(
-        ...     model=model,
         ...     layer_names=["transformer.h.0"],
         ...     output_type="token",
         ... )  # doctest: +SKIP
-        >>> result = pipeline.run(dataset=dataset, batch_size=8)  # doctest: +SKIP
+        >>> result = pipeline.run(  # doctest: +SKIP
+        ...     dataset=dataset, batch_size=8, model_fn=lambda: model
+        ... )
         >>> result.dataset.activations("transformer.h.0").shape  # doctest: +SKIP
     """
 
     def __init__(
         self,
-        model: nn.Module,
         layer_names: str | list[str],
         output_type: Literal["sequence", "token"],
         cache_dir: str | Path | None = None,
@@ -118,11 +117,9 @@ class ActivationPipeline:
         show_progress: bool = True,
         cache_outputs: bool = False,
     ) -> None:
-        """Build a pipeline for one model and one set of layers.
+        """Build a pipeline for one set of layers.
 
         Args:
-            model: The model to run. Wrapped, not mutated -- ``model``
-                itself is left untouched.
             layer_names: One or more module names (as in
                 ``model.named_modules()``) whose forward output to capture.
             output_type: ``"token"`` captures one row per real (non-padding)
@@ -157,147 +154,105 @@ class ActivationPipeline:
 
         self._cache_dir = Path(cache_dir) if cache_dir is not None else None
 
-        hooked_model = HookedModel(model=model)
         names = [layer_names] if isinstance(layer_names, str) else list(layer_names)
 
-        self._model_name = type(model).__name__
         self._output_type: Literal["sequence", "token"] = output_type
         self._layer_names = names
+        self._device = device
+        self._tokenizer = tokenizer
+        self._show_progress = show_progress
+        self._cache_outputs = cache_outputs
 
-        self._accumulator = self._build_accumulator(
-            output_type=output_type, cache_outputs=cache_outputs
-        )
-        self._runner = self._build_runner(
-            output_type=output_type,
-            hooked_model=hooked_model,
-            layer_names=names,
-            device=device,
-            tokenizer=tokenizer,
-            show_progress=show_progress,
-        )
-
-    def _build_accumulator(
-        self, *, output_type: Literal["sequence", "token"], cache_outputs: bool
-    ) -> (
-        InMemorySequenceActivationAccumulator
-        | InMemoryTokenActivationAccumulator
-        | H5SequenceActivationAccumulator
-        | H5TokenActivationAccumulator
-    ):
-        """Build the handler that turns per-batch step output into a dataset.
-
-        Args:
-            output_type: See :meth:`__init__`.
-            cache_outputs: See :meth:`__init__`. When ``True``, creates
-                ``self._cache_dir`` if it doesn't exist yet, since this is
-                the only code path that actually needs a directory on disk.
-
-        Returns:
-            An in-memory accumulator, or an HDF5-backed one under
-            ``self._cache_dir / "activations.h5"``.
-        """
-        if cache_outputs:
-            assert self._cache_dir is not None  # enforced in __init__
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-            path = self._cache_dir / CACHE_FILE_NAME
-            match output_type:
-                case "sequence":
-                    return H5SequenceActivationAccumulator(path=path)
-                case "token":
-                    return H5TokenActivationAccumulator(path=path)
-
-        match output_type:
-            case "sequence":
-                return InMemorySequenceActivationAccumulator()
-            case "token":
-                return InMemoryTokenActivationAccumulator()
-
-    def _build_runner(
+    def run(
         self,
+        dataset: Dataset[ActivationSample],
         *,
-        output_type: Literal["sequence", "token"],
-        hooked_model: HookedModel,
-        layer_names: list[str],
-        device: torch.device | str,
-        tokenizer: PreTrainedTokenizerBase | None,
-        show_progress: bool,
-    ) -> ActivationStepRunner:
-        """Build the Ignite-driven runner that executes the forward passes.
-
-        Args:
-            output_type: See :meth:`__init__`.
-            hooked_model: The model wrapped for activation capture.
-            layer_names: Layers to capture, as passed to :meth:`__init__`.
-            device: Device to run the model on.
-            tokenizer: See :meth:`__init__`.
-            show_progress: See :meth:`__init__`.
-
-        Returns:
-            A runner with ``self._accumulator`` already attached as a
-            handler, so every completed batch feeds the dataset being built.
-        """
-        return ActivationStepRunner(
-            output_type=output_type,
-            hooked_model=hooked_model,
-            layer_names=layer_names,
-            device=device,
-            tokenizer=tokenizer,
-            handlers=[self._accumulator],
-            show_progress=show_progress,
-        )
-
-    def run(self, dataset: Dataset[ActivationSample], *, batch_size: int) -> RunResult:
+        batch_size: int,
+        model_fn: Callable[[], nn.Module],
+    ) -> RunResult:
         """Run the model over ``dataset``, capturing the configured layers.
 
         If this pipeline was built with ``cache_outputs=True`` and its
-        cache file already exists (e.g. from an earlier call), the model is
-        never run again -- the existing file's contents are returned as-is.
-        Delete the cache file first to force a fresh run.
+        cache file already exists (e.g. from an earlier call), ``model_fn``
+        is never called -- the existing file's contents are returned as-is.
+        Delete the cache file first to force a fresh run and model load.
 
         Args:
             dataset: Yields ``ActivationSample`` items, in the order
                 activations should be captured in.
             batch_size: Number of samples per forward pass.
+            model_fn: Zero-argument callable that constructs the model to run.
+                It is called only after establishing that no cached output
+                exists.
 
         Returns:
-            The accumulated activations and this run's metadata. See
-            :class:`RunResult` for what ``metadata`` contains when this
-            call resumed an existing cache instead of running fresh.
+            The accumulated activations and the metadata from the run that
+            produced them. A cache hit returns the persisted original metadata.
         """
-        if self._accumulator.dataset.exists():
-            resumed = self._accumulator.dataset
+        if self._cache_outputs:
+            assert self._cache_dir is not None  # enforced in __init__
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path = self._cache_dir / CACHE_FILE_NAME
+            accumulator = (
+                H5SequenceActivationAccumulator(path=cache_path)
+                if self._output_type == "sequence"
+                else H5TokenActivationAccumulator(path=cache_path)
+            )
+        else:
+            accumulator = (
+                InMemorySequenceActivationAccumulator()
+                if self._output_type == "sequence"
+                else InMemoryTokenActivationAccumulator()
+            )
+
+        if accumulator.dataset.exists():
+            resumed = accumulator.dataset
+            metadata = accumulator.run_metadata
+            if metadata is None:
+                assert self._cache_dir is not None
+                raise RuntimeError(
+                    f"Cache at {self._cache_dir / CACHE_FILE_NAME} has no run metadata. "
+                    "Delete it and rerun to create a complete cache."
+                )
             logger.info(
                 "Resuming from existing cache: %d samples already present.",
                 len(resumed),
             )
             return RunResult(
                 dataset=resumed,
-                metadata={
-                    "model": self._model_name,
-                    "output_type": self._output_type,
-                    "layer_names": self._layer_names,
-                    "num_samples": len(resumed),
-                },
+                metadata=metadata,
             )
+
+        model = model_fn()
+        model_name = type(model).__name__
+        runner = ActivationStepRunner(
+            output_type=self._output_type,
+            hooked_model=HookedModel(model=model),
+            layer_names=self._layer_names,
+            device=self._device,
+            tokenizer=self._tokenizer,
+            handlers=[accumulator],
+            show_progress=self._show_progress,
+        )
 
         started_at = datetime.now(UTC)
         logger.info(
             "Starting run: model=%s, output_type=%s",
-            self._model_name,
+            model_name,
             self._output_type,
         )
 
         loader = activation_loader(
             dataset=dataset, output_type=self._output_type, batch_size=batch_size
         )
-        _, timer = self._runner.run(loader=loader)
-        result = self._accumulator.dataset
+        _, timer = runner.run(loader=loader)
+        result = accumulator.dataset
 
         finished_at = datetime.now(UTC)
         logger.info("Run finished: %d samples in %.2fs", len(result), timer.value())
 
         metadata = {
-            "model": self._model_name,
+            "model": model_name,
             "output_type": self._output_type,
             "layer_names": self._layer_names,
             "num_samples": len(result),
@@ -309,4 +264,5 @@ class ActivationPipeline:
                 "hostname": socket.gethostname(),
             },
         }
+        accumulator.save_run_metadata(metadata=metadata)
         return RunResult(dataset=result, metadata=metadata)
